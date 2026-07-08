@@ -29,7 +29,11 @@ targets:
         # macOS 26 sandboxes script phases by default; our pre-build script must
         # read core/target and write app/Generated, so disable it.
         ENABLE_USER_SCRIPT_SANDBOXING: NO
-        CODE_SIGN_IDENTITY: "-"      # ad-hoc local signing (no dev team needed)
+        # Stable self-signed identity (created in the login keychain). Unlike ad-hoc
+        # "-" signing, the code hash-independent identity keeps TCC grants (Screen
+        # Recording, Accessibility) valid across rebuilds — otherwise every rebuild
+        # invalidates them and macOS keeps re-prompting. See README (Dev signing).
+        CODE_SIGN_IDENTITY: "MicioDev Local Signing"
         CODE_SIGN_STYLE: Manual
         # Xcode 16+ splits Debug builds into a stub + debug.dylib linked with
         # -undefined dynamic_lookup, which lets the Rust static lib's symbols stay

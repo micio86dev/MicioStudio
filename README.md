@@ -12,8 +12,18 @@ brew install xcodegen ffmpeg     # xcodegen: generates the .xcodeproj; ffmpeg: f
 
 # Rust: cargo 1.89+ (Homebrew or rustup both work — the bindgen is embedded, no version skew)
 cargo --version
+
+# Stable dev code-signing identity (one-time). Without it the app is ad-hoc signed and
+# every rebuild invalidates its Screen Recording / Accessibility grants — macOS then
+# re-prompts forever and recording fails. This creates a self-signed identity the app
+# is signed with (app/project.yml → CODE_SIGN_IDENTITY), so grants persist across rebuilds.
+bash scripts/setup-dev-signing.sh
 ```
 Requirements: macOS 14+ (developed on macOS 26 / Xcode 26 / Swift 6.3 / Apple Silicon).
+
+Grant the app's permissions ONCE after the first launch; with the stable identity they
+survive rebuilds. If they ever get stuck (e.g. after switching signing), reset and re-grant:
+`tccutil reset ScreenCapture dev.miciodev.MicioStudio` (and `Accessibility`, `Camera`, `Microphone`).
 
 ## Repo layout
 ```
