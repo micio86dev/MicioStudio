@@ -1,6 +1,7 @@
 import Foundation
 import ScreenCaptureKit
 import AVFoundation
+import AppKit
 
 /// Orchestrates a recording session: fixes t0, starts the screen/camera/mic/event
 /// capturers, and finalizes every writer on stop. UI-facing state lives on the main
@@ -31,6 +32,11 @@ final class RecordingCoordinator: ObservableObject {
     @Published private(set) var micLevel: Float = 0        // 0..1 for the meter
     @Published private(set) var systemLevel: Float = 0     // 0..1 for the meter
     @Published private(set) var elapsed: TimeInterval = 0
+    @Published private(set) var isExporting = false
+    @Published private(set) var exportProgress: Double = 0  // 0..1
+    @Published private(set) var combinedURL: URL?
+
+    private let exporter = CombinedExporter()
 
     private var screen: ScreenCapturer?
     private var camera: CameraCapturer?
@@ -125,11 +131,26 @@ final class RecordingCoordinator: ObservableObject {
         let dir = currentDir
         screen = nil; camera = nil; mic = nil; events = nil
         lastOutputDir = dir
-
-        // The app writes ONLY the canonical separate streams (SPEC §5.1). The throwaway
-        // side-by-side preview (combined.mov) is derived by scripts/verify-phase1.sh.
+        combinedURL = nil
         state = .idle
-        status = dir.map { "Saved to \($0.path)" } ?? "Saved."
+
+        // Build + open the side-by-side preview with a progress bar. Failure here does
+        // NOT lose the recording — the canonical separate streams are already saved.
+        guard let dir else { status = "Saved."; return }
+        status = "Building preview…"
+        isExporting = true
+        exportProgress = 0
+        do {
+            let url = try await exporter.export(sessionDir: dir) { [weak self] p in
+                Task { @MainActor in self?.exportProgress = p }
+            }
+            combinedURL = url
+            status = "Saved to \(dir.path)"
+            NSWorkspace.shared.open(url)   // auto-open the preview
+        } catch {
+            status = "Saved to \(dir.path) (preview failed: \(error))"
+        }
+        isExporting = false
     }
 
     /// Populate the display picker. Requires Screen Recording permission; silently

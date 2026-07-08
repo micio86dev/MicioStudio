@@ -44,8 +44,26 @@ struct ContentView: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity)
 
+            if recorder.isExporting {
+                VStack(spacing: 4) {
+                    ProgressView(value: recorder.exportProgress)
+                    Text("Building preview… \(Int(recorder.exportProgress * 100))%")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: 320)
+            }
+
+            if let combined = recorder.combinedURL {
+                Button {
+                    NSWorkspace.shared.open(combined)
+                } label: {
+                    Label("Open preview (combined.mov)", systemImage: "play.rectangle.fill")
+                }
+                .buttonStyle(.bordered)
+            }
+
             if let dir = recorder.lastOutputDir {
-                Button("Reveal last recording") {
+                Button("Reveal recording folder") {
                     NSWorkspace.shared.activateFileViewerSelecting([dir])
                 }
                 .buttonStyle(.link)
