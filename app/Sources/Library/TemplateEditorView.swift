@@ -100,12 +100,16 @@ private struct CanvasView: View {
                 Rectangle().stroke(.white.opacity(0.15))
                 ForEach(doc.layers) { layer in
                     if layer.rect != nil {
-                        DraggableLayer(layer: layer, selected: selection == layer.id, canvas: size) { newRect in
-                            if let i = doc.layers.firstIndex(where: { $0.id == layer.id }) {
-                                doc.layers[i].rect = newRect
-                            }
-                            selection = layer.id
-                        }
+                        DraggableLayer(
+                            layer: layer,
+                            selected: selection == layer.id,
+                            canvas: size,
+                            onSelect: { selection = layer.id },
+                            onChange: { newRect in
+                                if let i = doc.layers.firstIndex(where: { $0.id == layer.id }) {
+                                    doc.layers[i].rect = newRect
+                                }
+                            })
                     }
                 }
             }
@@ -126,32 +130,62 @@ private struct DraggableLayer: View {
     let layer: Layer
     let selected: Bool
     let canvas: CGSize
-    let onMove: (RectN) -> Void
+    let onSelect: () -> Void
+    let onChange: (RectN) -> Void
 
     @State private var startRect: RectN?
+
+    private let minSize = 0.05
 
     var body: some View {
         let r = layer.rect ?? RectN(x: 0, y: 0, w: 0.1, h: 0.1)
         let w = CGFloat(r.w) * canvas.width
         let h = CGFloat(r.h) * canvas.height
-        RoundedRectangle(cornerRadius: 6)
-            .fill(color.opacity(0.28))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(color, lineWidth: selected ? 2.5 : 1))
-            .overlay(Text(layer.kind.label).font(.caption2).foregroundStyle(.white))
-            .frame(width: max(w, 8), height: max(h, 8))
-            .position(x: CGFloat(r.x) * canvas.width + w / 2, y: CGFloat(r.y) * canvas.height + h / 2)
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        let base = startRect ?? r
-                        if startRect == nil { startRect = r }
-                        var nr = base
-                        nr.x = min(max(0, base.x + Double(value.translation.width / canvas.width)), 1 - base.w)
-                        nr.y = min(max(0, base.y + Double(value.translation.height / canvas.height)), 1 - base.h)
-                        onMove(nr)
-                    }
-                    .onEnded { _ in startRect = nil }
-            )
+        ZStack(alignment: .bottomTrailing) {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(color.opacity(0.28))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(color, lineWidth: selected ? 2.5 : 1))
+                .overlay(Text(layer.kind.label).font(.caption2).foregroundStyle(.white))
+                .contentShape(Rectangle())
+                .gesture(moveGesture(base: r))
+            if selected {
+                // bottom-right resize handle
+                Circle().fill(.white).overlay(Circle().stroke(color, lineWidth: 2))
+                    .frame(width: 14, height: 14)
+                    .offset(x: 7, y: 7)
+                    .gesture(resizeGesture(base: r))
+            }
+        }
+        .frame(width: max(w, 8), height: max(h, 8))
+        .position(x: CGFloat(r.x) * canvas.width + w / 2, y: CGFloat(r.y) * canvas.height + h / 2)
+        .onTapGesture { onSelect() }
+    }
+
+    private func moveGesture(base r: RectN) -> some Gesture {
+        DragGesture()
+            .onChanged { value in
+                onSelect()
+                let base = startRect ?? r
+                if startRect == nil { startRect = r }
+                var nr = base
+                nr.x = min(max(0, base.x + Double(value.translation.width / canvas.width)), 1 - base.w)
+                nr.y = min(max(0, base.y + Double(value.translation.height / canvas.height)), 1 - base.h)
+                onChange(nr)
+            }
+            .onEnded { _ in startRect = nil }
+    }
+
+    private func resizeGesture(base r: RectN) -> some Gesture {
+        DragGesture()
+            .onChanged { value in
+                let base = startRect ?? r
+                if startRect == nil { startRect = r }
+                var nr = base
+                nr.w = min(max(minSize, base.w + Double(value.translation.width / canvas.width)), 1 - base.x)
+                nr.h = min(max(minSize, base.h + Double(value.translation.height / canvas.height)), 1 - base.y)
+                onChange(nr)
+            }
+            .onEnded { _ in startRect = nil }
     }
 
     private var color: Color {

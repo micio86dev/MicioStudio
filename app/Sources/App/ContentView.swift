@@ -15,6 +15,15 @@ struct ContentView: View {
 
             PermissionsPanel(perms: perms)
             SourcesPanel(recorder: recorder)
+
+            if perms.camera, recorder.selectedCameraDeviceID != nil {
+                WebcamPreview(deviceID: recorder.selectedCameraDeviceID, active: recorder.state == .idle)
+                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                    .frame(maxWidth: 360, maxHeight: 203)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(.secondary.opacity(0.3)))
+            }
+
             TemplatesPanel(store: templates)
 
             if recorder.isRecording || recorder.elapsed > 0 {
