@@ -13,15 +13,17 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
 
             PermissionsPanel(perms: perms)
+            SourcesPanel(recorder: recorder)
 
-            if recorder.displays.count > 1 {
-                Picker("Monitor", selection: $recorder.selectedDisplayID) {
-                    ForEach(recorder.displays) { display in
-                        Text(display.label).tag(Optional(display.id))
+            if recorder.isRecording || recorder.elapsed > 0 {
+                HStack(spacing: 8) {
+                    if recorder.isRecording {
+                        Circle().fill(.red).frame(width: 10, height: 10)
                     }
+                    Text(Self.timeString(recorder.elapsed))
+                        .font(.system(.title2, design: .monospaced).weight(.medium))
+                        .foregroundStyle(recorder.isRecording ? .red : .secondary)
                 }
-                .pickerStyle(.menu)
-                .disabled(recorder.isRecording || recorder.isBusy)
             }
 
             Button(action: recorder.toggle) {
@@ -50,10 +52,69 @@ struct ContentView: View {
             }
         }
         .padding(24)
-        .frame(minWidth: 500, minHeight: 460)
+        .frame(minWidth: 520, minHeight: 560)
         .task {
             await perms.refresh()
             await recorder.refreshDisplays()
+            recorder.refreshAudioDevices()
+        }
+    }
+
+    static func timeString(_ t: TimeInterval) -> String {
+        let total = Int(t)
+        return String(format: "%02d:%02d", total / 60, total % 60)
+    }
+}
+
+/// Capture sources: which monitor, which microphone, and live input level meters.
+private struct SourcesPanel: View {
+    @ObservedObject var recorder: RecordingCoordinator
+
+    var body: some View {
+        GroupBox("Sources") {
+            VStack(alignment: .leading, spacing: 10) {
+                if recorder.displays.count > 1 {
+                    Picker("Monitor", selection: $recorder.selectedDisplayID) {
+                        ForEach(recorder.displays) { d in Text(d.label).tag(Optional(d.id)) }
+                    }
+                    .disabled(recorder.isRecording || recorder.isBusy)
+                }
+                if !recorder.audioDevices.isEmpty {
+                    Picker("Microphone", selection: $recorder.selectedAudioDeviceID) {
+                        ForEach(recorder.audioDevices) { d in Text(d.label).tag(Optional(d.id)) }
+                    }
+                    .disabled(recorder.isRecording || recorder.isBusy)
+                }
+                HStack(spacing: 20) {
+                    LevelMeter(label: "Mic", level: recorder.micLevel)
+                    LevelMeter(label: "System", level: recorder.systemLevel)
+                    Spacer()
+                }
+                .padding(.top, 2)
+            }
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// A small vertical VU-style meter, 0..1.
+private struct LevelMeter: View {
+    let label: String
+    let level: Float
+
+    var body: some View {
+        VStack(spacing: 4) {
+            GeometryReader { geo in
+                ZStack(alignment: .bottom) {
+                    RoundedRectangle(cornerRadius: 3).fill(.quaternary)
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(level > 0.85 ? Color.red : (level > 0.6 ? .yellow : .green))
+                        .frame(height: max(0, min(1, CGFloat(level))) * geo.size.height)
+                }
+            }
+            .frame(width: 14, height: 56)
+            Text(label).font(.caption2).foregroundStyle(.secondary)
         }
     }
 }

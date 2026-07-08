@@ -16,6 +16,10 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
     private let audioWriter: SegmentWriter
     private let videoQueue = DispatchQueue(label: "dev.miciodev.screen.video")
     private let audioQueue = DispatchQueue(label: "dev.miciodev.screen.audio")
+    private var loggedFirstFrame = false
+
+    /// Called on the audio queue with a 0..1 system-audio level for the UI meter.
+    var onSystemLevel: (@Sendable (Float) -> Void)?
 
     init(display: SCDisplay, clock: RecordingClock, outputDir: URL) throws {
         displayID = display.displayID
@@ -78,8 +82,14 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
             // is recorded continuously from t0 — skipping idle frames made screen.mov
             // start at the first on-screen change, misaligning it from the audio.
             guard CMSampleBufferGetImageBuffer(sampleBuffer) != nil else { return }
+            if !loggedFirstFrame {
+                loggedFirstFrame = true
+                let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
+                NSLog("[screen-sync] firstFramePTS=\(pts) hostNow=\(CMClockGetTime(CMClockGetHostTimeClock()).seconds)")
+            }
             videoWriter.append(sampleBuffer)
         case .audio:
+            onSystemLevel?(AudioLevel.rms(from: sampleBuffer))
             audioWriter.append(sampleBuffer)
         default:
             break

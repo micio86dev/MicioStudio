@@ -16,17 +16,32 @@ final class RecordingCoordinator: ObservableObject {
         let label: String
     }
 
+    struct AudioDeviceOption: Identifiable, Hashable {
+        let id: String   // AVCaptureDevice.uniqueID
+        let label: String
+    }
+
     @Published private(set) var state: State = .idle
     @Published private(set) var status = ""
     @Published private(set) var lastOutputDir: URL?
     @Published private(set) var displays: [DisplayOption] = []
     @Published var selectedDisplayID: CGDirectDisplayID?
+    @Published private(set) var audioDevices: [AudioDeviceOption] = []
+    @Published var selectedAudioDeviceID: String?
+    @Published private(set) var micLevel: Float = 0        // 0..1 for the meter
+    @Published private(set) var systemLevel: Float = 0     // 0..1 for the meter
+    @Published private(set) var elapsed: TimeInterval = 0
 
     private var screen: ScreenCapturer?
     private var camera: CameraCapturer?
     private var mic: AudioCapturer?
     private var events: EventTap?
     private var currentDir: URL?
+
+    private let micLevelHolder = AtomicFloat()
+    private let systemLevelHolder = AtomicFloat()
+    private var startDate: Date?
+    private var ticker: Task<Void, Never>?
 
     var isRecording: Bool { state == .recording }
     var isBusy: Bool { state == .preparing || state == .finishing }
@@ -64,8 +79,12 @@ final class RecordingCoordinator: ObservableObject {
             let clock = RecordingClock()
             let screen = try ScreenCapturer(display: display, clock: clock, outputDir: dir)
             let camera = try? CameraCapturer(clock: clock, outputDir: dir)
-            let mic = try? AudioCapturer(clock: clock, outputDir: dir)
+            let mic = selectedMicDevice().flatMap { try? AudioCapturer(clock: clock, device: $0, outputDir: dir) }
             let events = EventTap(clock: clock, displayID: screen.displayID, outputDir: dir)
+
+            // Level meters: capturers write to thread-safe holders; the ticker publishes.
+            screen.onSystemLevel = { [systemLevelHolder] in systemLevelHolder.set($0) }
+            mic?.onLevel = { [micLevelHolder] in micLevelHolder.set($0) }
 
             try await screen.start()
             camera?.start()
@@ -78,6 +97,7 @@ final class RecordingCoordinator: ObservableObject {
             self.events = events
             state = .recording
             status = summary(camera: camera != nil, mic: mic != nil, tapOK: tapOK)
+            startTicker()
         } catch {
             NSLog("[RecordingCoordinator] start failed: \(error)")
             state = .failed(error.localizedDescription)
@@ -88,6 +108,8 @@ final class RecordingCoordinator: ObservableObject {
     func stop() async {
         state = .finishing
         status = "Finishing…"
+        ticker?.cancel(); ticker = nil
+        micLevel = 0; systemLevel = 0
         events?.stop()
 
         // Stop ALL capture delivery together BEFORE finalizing any writer. Stopping
@@ -127,7 +149,36 @@ final class RecordingCoordinator: ObservableObject {
         }
     }
 
+    /// Populate the microphone picker with the available audio input devices.
+    func refreshAudioDevices() {
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone, .external], mediaType: .audio, position: .unspecified)
+        audioDevices = discovery.devices.map { AudioDeviceOption(id: $0.uniqueID, label: $0.localizedName) }
+        if selectedAudioDeviceID == nil || !audioDevices.contains(where: { $0.id == selectedAudioDeviceID }) {
+            selectedAudioDeviceID = AVCaptureDevice.default(for: .audio)?.uniqueID ?? audioDevices.first?.id
+        }
+    }
+
     // MARK: - Helpers
+
+    private func selectedMicDevice() -> AVCaptureDevice? {
+        if let id = selectedAudioDeviceID, let device = AVCaptureDevice(uniqueID: id) { return device }
+        return AVCaptureDevice.default(for: .audio)
+    }
+
+    private func startTicker() {
+        startDate = Date()
+        elapsed = 0
+        ticker = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(50))
+                guard let self else { return }
+                if let start = self.startDate { self.elapsed = Date().timeIntervalSince(start) }
+                self.micLevel = self.micLevelHolder.get()
+                self.systemLevel = self.systemLevelHolder.get()
+            }
+        }
+    }
 
     private func makeOutputDir() throws -> URL {
         let movies = try FileManager.default.url(for: .moviesDirectory, in: .userDomainMask,

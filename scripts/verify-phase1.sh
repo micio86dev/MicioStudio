@@ -87,10 +87,17 @@ fi
 out="$DIR/combined.mov"
 if [[ -f "$screen" ]]; then
   echo "  building combined.mov (side-by-side preview)…"
-  inputs=(-i "$screen"); vfilters="[0:v]scale=-2:720,setsar=1[s]"; vmap="[s]"; amaps=()
+  # 16:9 (1920x1080): screen fit + letterboxed, camera as a picture-in-picture
+  # bottom-right — a rough preview of the eventual composited layout (SPEC §7).
+  inputs=(-i "$screen"); amaps=()
+  vfilters="[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[bg]"
+  vmap="[bg]"
   ai=1
   if [[ -f "$DIR/camera.mov" ]]; then
-    inputs+=(-i "$DIR/camera.mov"); vfilters+=";[${ai}:v]scale=-2:720,setsar=1[c];[s][c]hstack=inputs=2[v]"; vmap="[v]"; ((ai++))
+    inputs+=(-i "$DIR/camera.mov")
+    vfilters+=";[${ai}:v]scale=480:-2,setsar=1[cam];[bg][cam]overlay=W-w-32:H-h-32[v]"
+    vmap="[v]"
+    ((ai++))
   fi
   for a in mic.caf system.caf; do
     [[ -f "$DIR/$a" ]] && { inputs+=(-i "$DIR/$a"); amaps+=("[${ai}:a]"); ((ai++)); }
