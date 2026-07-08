@@ -11,9 +11,16 @@ final class RecordingCoordinator: ObservableObject {
         case idle, preparing, recording, finishing, failed(String)
     }
 
+    struct DisplayOption: Identifiable, Hashable {
+        let id: CGDirectDisplayID
+        let label: String
+    }
+
     @Published private(set) var state: State = .idle
     @Published private(set) var status = ""
     @Published private(set) var lastOutputDir: URL?
+    @Published private(set) var displays: [DisplayOption] = []
+    @Published var selectedDisplayID: CGDirectDisplayID?
 
     private var screen: ScreenCapturer?
     private var camera: CameraCapturer?
@@ -44,7 +51,8 @@ final class RecordingCoordinator: ObservableObject {
             // build (ad-hoc signing invalidates the grant on every rebuild), this throws
             // and we bail out WITHOUT leaving an empty session folder behind.
             let content = try await SCShareableContent.current
-            guard let display = content.displays.first else {
+            guard let display = content.displays.first(where: { $0.displayID == selectedDisplayID })
+                    ?? content.displays.first else {
                 throw Self.err("No display available — grant Screen Recording for this build in System Settings, then relaunch.")
             }
 
@@ -81,9 +89,16 @@ final class RecordingCoordinator: ObservableObject {
         state = .finishing
         status = "Finishing…"
         events?.stop()
-        await screen?.stop()
-        await camera?.stop()
-        await mic?.stop()
+
+        // Stop ALL capture delivery together BEFORE finalizing any writer. Stopping
+        // sequentially (await each stop+flush) let the mic keep recording during the
+        // others' finalization → seconds of extra audio and duration drift.
+        camera?.stopCapture()
+        mic?.stopCapture()
+        await screen?.stopCapture()
+        await screen?.finishWriting()
+        await camera?.finishWriting()
+        await mic?.finishWriting()
 
         let dir = currentDir
         screen = nil; camera = nil; mic = nil; events = nil
@@ -93,6 +108,23 @@ final class RecordingCoordinator: ObservableObject {
         // side-by-side preview (combined.mov) is derived by scripts/verify-phase1.sh.
         state = .idle
         status = dir.map { "Saved to \($0.path)" } ?? "Saved."
+    }
+
+    /// Populate the display picker. Requires Screen Recording permission; silently
+    /// no-ops until it's granted (the permissions panel prompts for it).
+    func refreshDisplays() async {
+        guard let content = try? await SCShareableContent.current else { return }
+        let main = CGMainDisplayID()
+        displays = content.displays.enumerated().map { index, d in
+            let mode = CGDisplayCopyDisplayMode(d.displayID)
+            let w = mode?.pixelWidth ?? d.width
+            let h = mode?.pixelHeight ?? d.height
+            let tag = d.displayID == main ? " (main)" : ""
+            return DisplayOption(id: d.displayID, label: "Monitor \(index + 1) — \(w)×\(h)\(tag)")
+        }
+        if selectedDisplayID == nil || !displays.contains(where: { $0.id == selectedDisplayID }) {
+            selectedDisplayID = displays.first(where: { $0.id == main })?.id ?? displays.first?.id
+        }
     }
 
     // MARK: - Helpers

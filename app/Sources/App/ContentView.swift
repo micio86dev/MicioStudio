@@ -14,6 +14,16 @@ struct ContentView: View {
 
             PermissionsPanel(perms: perms)
 
+            if recorder.displays.count > 1 {
+                Picker("Monitor", selection: $recorder.selectedDisplayID) {
+                    ForEach(recorder.displays) { display in
+                        Text(display.label).tag(Optional(display.id))
+                    }
+                }
+                .pickerStyle(.menu)
+                .disabled(recorder.isRecording || recorder.isBusy)
+            }
+
             Button(action: recorder.toggle) {
                 Label(recorder.isRecording ? "Stop" : "Record",
                       systemImage: recorder.isRecording ? "stop.circle.fill" : "record.circle")
@@ -40,8 +50,11 @@ struct ContentView: View {
             }
         }
         .padding(24)
-        .frame(minWidth: 500, minHeight: 440)
-        .task { await perms.refresh() }
+        .frame(minWidth: 500, minHeight: 460)
+        .task {
+            await perms.refresh()
+            await recorder.refreshDisplays()
+        }
     }
 }
 

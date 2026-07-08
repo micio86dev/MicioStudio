@@ -22,8 +22,8 @@ done
 fail=0
 ok()   { printf '[ ok ] %s\n' "$1"; }
 bad()  { printf '[FAIL] %s\n' "$1"; fail=1; }
-probe() { ffprobe -v error "$@"; }
-dur()  { probe -show_entries format=duration -of default=nk=1:nw=1 "$1" 2>/dev/null || echo ""; }
+probe() { ffprobe -v error "$@" 2>/dev/null || true; }
+dur()  { probe -show_entries format=duration -of default=nk=1:nw=1 "$1" || echo ""; }
 
 echo "== Phase 1 gate: $DIR =="
 
@@ -31,6 +31,11 @@ echo "== Phase 1 gate: $DIR =="
 screen="$DIR/screen.mov"
 if [[ -f "$screen" ]]; then
   codec=$(probe -select_streams v:0 -show_entries stream=codec_name -of default=nk=1:nw=1 "$screen")
+  if [[ -z "$codec" ]]; then
+    echo "[FAIL] screen.mov is unreadable (no moov atom) — the recording is not finalized."
+    echo "       Press Stop in the app and wait for 'Saved to …', THEN re-run this script."
+    exit 1
+  fi
   w=$(probe -select_streams v:0 -show_entries stream=width  -of default=nk=1:nw=1 "$screen")
   h=$(probe -select_streams v:0 -show_entries stream=height -of default=nk=1:nw=1 "$screen")
   [[ "$codec" == "hevc" ]] && ok "screen.mov is HEVC" || bad "screen.mov codec is '$codec' (want hevc)"

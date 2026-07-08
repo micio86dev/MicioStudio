@@ -56,8 +56,12 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
 
     func start() async throws { try await stream.startCapture() }
 
-    func stop() async {
-        try? await stream.stopCapture()
+    /// Stop capture delivery (fast). Separated from finalization so the coordinator
+    /// can stop every stream near-simultaneously before any writer is flushed.
+    func stopCapture() async { try? await stream.stopCapture() }
+
+    /// Flush and close the output files. Call after stopCapture().
+    func finishWriting() async {
         await videoWriter.finish()
         await audioWriter.finish()
     }

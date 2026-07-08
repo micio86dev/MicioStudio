@@ -48,10 +48,8 @@ final class CameraCapturer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
 
     func start() { session.startRunning() }
 
-    func stop() async {
-        session.stopRunning()
-        await writer.finish()
-    }
+    func stopCapture() { session.stopRunning() }
+    func finishWriting() async { await writer.finish() }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         writer.append(sampleBuffer)
