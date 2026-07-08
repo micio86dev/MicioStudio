@@ -11,8 +11,6 @@ struct ContentView: View {
         VStack(spacing: 18) {
             Text(Config.productName)
                 .font(.largeTitle.bold())
-            Text("Phase 1 — native-Retina capture")
-                .foregroundStyle(.secondary)
 
             PermissionsPanel(perms: perms)
             SourcesPanel(recorder: recorder)

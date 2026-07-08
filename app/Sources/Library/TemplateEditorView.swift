@@ -287,7 +287,10 @@ private struct LayerPanel: View {
                     Button("Screen") { add(.screen) }
                     Button("Camera") { add(.camera) }
                     Button("Image") { add(.image) }
-                    Button("Background") { add(.background) }
+                    // Exactly one background per scene, and it can't be removed.
+                    if !doc.layers.contains(where: { $0.kind == .background }) {
+                        Button("Background") { add(.background) }
+                    }
                 } label: { Image(systemName: "plus") }
                 .menuStyle(.borderlessButton).frame(width: 28)
             }
@@ -300,10 +303,12 @@ private struct LayerPanel: View {
                         Image(systemName: icon(layer.kind))
                         Text(layer.kind.label)
                         Spacer()
-                        Button(role: .destructive) {
-                            doc.layers.removeAll { $0.id == layer.id }
-                        } label: { Image(systemName: "trash") }
-                        .buttonStyle(.borderless)
+                        if layer.kind != .background {   // background is mandatory, not removable
+                            Button(role: .destructive) {
+                                doc.layers.removeAll { $0.id == layer.id }
+                            } label: { Image(systemName: "trash") }
+                            .buttonStyle(.borderless)
+                        }
                     }
                     .tag(layer.id)
                 }
