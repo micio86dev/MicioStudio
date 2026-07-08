@@ -4,16 +4,31 @@ import Foundation
 /// source of truth for validation (`normalizeTemplateJson`); this model exists so the
 /// SwiftUI editor can bind to fields. A flat `Layer` (kind + optional fields) keeps the
 /// UI simple; custom Codable maps to/from the tagged JSON on disk.
+/// A template is a collection of scenes; each scene is a full layout. `canvas`/`layers`
+/// proxy the *active* scene so the editor, renderer and main window operate on it while
+/// scene management (add/switch/transition) is layered on top.
 struct TemplateDoc: Codable, Equatable {
     var version = 1
-    var canvas = CanvasSize(width: 1920, height: 1080)
-    var layers: [Layer] = []
+    var scenes: [SceneDoc] = [SceneDoc(name: "Scene 1", canvas: .init(width: 1920, height: 1080), layers: [])]
+    var activeSceneIndex = 0   // editor state; not persisted
 
-    static let `default` = TemplateDoc(version: 1, canvas: .init(width: 1920, height: 1080), layers: [
-        Layer(kind: .background, source: .screen, blur: 55, darken: 0.35),
-        Layer(kind: .screen, rect: RectN(x: 0.03, y: 0.12, w: 0.72, h: 0.76), cornerRadius: 16,
-              shadow: ShadowN(radius: 40, opacity: 0.45, dy: 12)),
-        Layer(kind: .camera, rect: RectN(x: 0.77, y: 0.62, w: 0.20, h: 0.26), cornerRadius: 20, mirror: true),
+    var canvas: CanvasSize {
+        get { scenes.indices.contains(activeSceneIndex) ? scenes[activeSceneIndex].canvas : .init(width: 1920, height: 1080) }
+        set { if scenes.indices.contains(activeSceneIndex) { scenes[activeSceneIndex].canvas = newValue } }
+    }
+    var layers: [Layer] {
+        get { scenes.indices.contains(activeSceneIndex) ? scenes[activeSceneIndex].layers : [] }
+        set { if scenes.indices.contains(activeSceneIndex) { scenes[activeSceneIndex].layers = newValue } }
+    }
+    var activeScene: SceneDoc? { scenes.indices.contains(activeSceneIndex) ? scenes[activeSceneIndex] : nil }
+
+    static let `default` = TemplateDoc(scenes: [
+        SceneDoc(name: "Main", canvas: .init(width: 1920, height: 1080), layers: [
+            Layer(kind: .background, source: .screen, blur: 55, darken: 0.35),
+            Layer(kind: .screen, rect: RectN(x: 0.03, y: 0.12, w: 0.72, h: 0.76), cornerRadius: 16,
+                  shadow: ShadowN(radius: 40, opacity: 0.45, dy: 12)),
+            Layer(kind: .camera, rect: RectN(x: 0.77, y: 0.62, w: 0.20, h: 0.26), cornerRadius: 20, mirror: true),
+        ]),
     ])
 
     func jsonString() throws -> String {
@@ -24,6 +39,56 @@ struct TemplateDoc: Codable, Equatable {
 
     static func parse(_ json: String) throws -> TemplateDoc {
         try JSONDecoder().decode(TemplateDoc.self, from: Data(json.utf8))
+    }
+}
+
+// Custom Codable: emit `{version, scenes}`; accept new (scenes) AND legacy ({canvas,
+// layers}) documents, migrating the latter into one scene. Mirrors the Rust core.
+extension TemplateDoc {
+    private enum Keys: String, CodingKey { case version, scenes, canvas, layers }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        version = (try? c.decode(Int.self, forKey: .version)) ?? 1
+        if let scenes = try? c.decode([SceneDoc].self, forKey: .scenes) {
+            self.scenes = scenes
+        } else {
+            let canvas = (try? c.decode(CanvasSize.self, forKey: .canvas)) ?? .init(width: 1920, height: 1080)
+            let layers = (try? c.decode([Layer].self, forKey: .layers)) ?? []
+            self.scenes = [SceneDoc(name: "Scene 1", canvas: canvas, layers: layers)]
+        }
+        activeSceneIndex = 0
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Keys.self)
+        try c.encode(version, forKey: .version)
+        try c.encode(scenes, forKey: .scenes)
+    }
+}
+
+/// One scene = a named full layout (one canvas + its layers, incl. exactly one background).
+struct SceneDoc: Equatable, Identifiable {
+    var id = UUID()
+    var name: String
+    var canvas: CanvasSize
+    var layers: [Layer]
+}
+
+extension SceneDoc: Codable {
+    private enum Keys: String, CodingKey { case name, canvas, layers }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        id = UUID()
+        name = (try? c.decode(String.self, forKey: .name)) ?? "Scene"
+        canvas = (try? c.decode(CanvasSize.self, forKey: .canvas)) ?? .init(width: 1920, height: 1080)
+        layers = (try? c.decode([Layer].self, forKey: .layers)) ?? []
+    }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Keys.self)
+        try c.encode(name, forKey: .name)
+        try c.encode(canvas, forKey: .canvas)
+        try c.encode(layers, forKey: .layers)
     }
 }
 

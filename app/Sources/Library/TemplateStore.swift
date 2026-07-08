@@ -55,8 +55,10 @@ final class TemplateStore: ObservableObject {
     func cameraDeviceIDs(templateID: String) -> [String] {
         guard let row = templates.first(where: { $0.id == templateID }) else { return [] }
         var ids: [String] = []
-        for layer in doc(for: row).layers where layer.kind == .camera {
-            if let d = layer.deviceId, !d.isEmpty, !ids.contains(d) { ids.append(d) }
+        for scene in doc(for: row).scenes {
+            for layer in scene.layers where layer.kind == .camera {
+                if let d = layer.deviceId, !d.isEmpty, !ids.contains(d) { ids.append(d) }
+            }
         }
         return ids
     }

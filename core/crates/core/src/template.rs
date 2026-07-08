@@ -5,9 +5,18 @@
 use crate::error::CoreError;
 use serde::{Deserialize, Serialize};
 
+/// A template is a named collection of scenes; each scene is a full layout the user
+/// can switch to (with a transition) during recording.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Template {
     pub version: u32,
+    pub scenes: Vec<Scene>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Scene {
+    pub name: String,
     pub canvas: Canvas,
     pub layers: Vec<Layer>,
 }
@@ -139,36 +148,70 @@ impl Layer {
 /// Validate a template's invariants (SPEC §3.2): positive canvas, at most one active
 /// background, and every layer rect normalized within 0..1.
 pub fn validate(template: &Template) -> Result<(), CoreError> {
-    if template.canvas.width == 0 || template.canvas.height == 0 {
+    if template.scenes.is_empty() {
         return Err(CoreError::InvalidTemplate {
-            message: "canvas dimensions must be positive".into(),
+            message: "template must have at least one scene".into(),
         });
     }
-    let backgrounds = template
-        .layers
-        .iter()
-        .filter(|l| matches!(l, Layer::Background(_)))
-        .count();
-    if backgrounds > 1 {
-        return Err(CoreError::InvalidTemplate {
-            message: format!("at most one background layer is allowed, found {backgrounds}"),
-        });
-    }
-    for layer in &template.layers {
-        if let Some(rect) = layer.rect() {
-            if !rect.is_normalized() {
-                return Err(CoreError::InvalidTemplate {
-                    message: "layer rect must be normalized within 0..1 with positive size".into(),
-                });
+    for scene in &template.scenes {
+        if scene.canvas.width == 0 || scene.canvas.height == 0 {
+            return Err(CoreError::InvalidTemplate {
+                message: "canvas dimensions must be positive".into(),
+            });
+        }
+        let backgrounds = scene
+            .layers
+            .iter()
+            .filter(|l| matches!(l, Layer::Background(_)))
+            .count();
+        if backgrounds > 1 {
+            return Err(CoreError::InvalidTemplate {
+                message: format!("a scene allows at most one background, found {backgrounds}"),
+            });
+        }
+        for layer in &scene.layers {
+            if let Some(rect) = layer.rect() {
+                if !rect.is_normalized() {
+                    return Err(CoreError::InvalidTemplate {
+                        message: "layer rect must be normalized within 0..1 with positive size".into(),
+                    });
+                }
             }
         }
     }
     Ok(())
 }
 
-/// Parse a template JSON document into the model.
+/// Parse a template JSON document into the model. Accepts the current scenes format
+/// AND the legacy single-layout format ({canvas, layers}) — migrating the latter into a
+/// one-scene template so old saved templates keep working.
 pub fn parse(json: &str) -> Result<Template, CoreError> {
-    serde_json::from_str(json).map_err(|e| CoreError::InvalidTemplate { message: e.to_string() })
+    #[derive(Deserialize)]
+    struct RawTemplate {
+        #[serde(default = "default_version")]
+        version: u32,
+        #[serde(default)]
+        scenes: Option<Vec<Scene>>,
+        #[serde(default)]
+        canvas: Option<Canvas>,
+        #[serde(default)]
+        layers: Option<Vec<Layer>>,
+    }
+    fn default_version() -> u32 {
+        1
+    }
+    let raw: RawTemplate = serde_json::from_str(json)
+        .map_err(|e| CoreError::InvalidTemplate { message: e.to_string() })?;
+    // A present `scenes` key (even empty) is the new format — validate handles empties.
+    if let Some(scenes) = raw.scenes {
+        return Ok(Template { version: raw.version, scenes });
+    }
+    let canvas = raw.canvas.unwrap_or(Canvas { width: 1920, height: 1080 });
+    let layers = raw.layers.unwrap_or_default();
+    Ok(Template {
+        version: raw.version,
+        scenes: vec![Scene { name: "Scene 1".into(), canvas, layers }],
+    })
 }
 
 /// Parse + validate a template JSON document (the FFI entry point for the editor).
@@ -208,21 +251,56 @@ mod tests {
       ]
     }"#;
 
+    // New scenes-format document. r##"…"## because the color hex contains `"#`.
+    const VALID_SCENES: &str = r##"{
+      "version": 1,
+      "scenes": [
+        { "name": "Intro", "canvas": { "width": 1920, "height": 1080 }, "layers": [
+          { "type": "background", "source": "color", "color": "#101018" } ] },
+        { "name": "Main", "canvas": { "width": 1920, "height": 1080 }, "layers": [
+          { "type": "background", "source": "screen", "blur": 40, "darken": 0.3 },
+          { "type": "camera", "rect": { "x": 0.75, "y": 0.6, "w": 0.2, "h": 0.26 } } ] }
+      ]
+    }"##;
+
     #[test]
     fn parses_the_spec_example() {
         let t = parse(VALID).expect("should parse");
         assert_eq!(t.version, 1);
-        assert_eq!(t.canvas, Canvas { width: 1920, height: 1080 });
-        assert_eq!(t.layers.len(), 4);
+        assert_eq!(t.scenes.len(), 1);
+        assert_eq!(t.scenes[0].canvas, Canvas { width: 1920, height: 1080 });
+        assert_eq!(t.scenes[0].layers.len(), 4);
     }
 
     #[test]
     fn camelcase_fields_map() {
         let t = parse(VALID).unwrap();
-        match &t.layers[1] {
+        match &t.scenes[0].layers[1] {
             Layer::Screen(s) => assert_eq!(s.corner_radius, 16.0),
             other => panic!("expected screen, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn legacy_layout_migrates_to_one_scene() {
+        let t = parse(VALID).unwrap();
+        assert_eq!(t.scenes.len(), 1, "old {{canvas,layers}} becomes one scene");
+        assert_eq!(t.scenes[0].name, "Scene 1");
+    }
+
+    #[test]
+    fn new_scenes_format_parses_and_validates() {
+        let t = parse(VALID_SCENES).expect("should parse scenes");
+        assert_eq!(t.scenes.len(), 2);
+        assert_eq!(t.scenes[0].name, "Intro");
+        assert_eq!(t.scenes[1].layers.len(), 2);
+        assert!(validate_template_json(VALID_SCENES.to_string()).is_ok());
+    }
+
+    #[test]
+    fn empty_scenes_is_rejected() {
+        let json = r#"{ "version": 1, "scenes": [] }"#;
+        assert!(validate_template_json(json.to_string()).is_err(), "no scenes must fail");
     }
 
     #[test]
