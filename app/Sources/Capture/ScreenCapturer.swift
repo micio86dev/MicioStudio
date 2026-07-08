@@ -17,7 +17,7 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
     private let videoQueue = DispatchQueue(label: "dev.miciodev.screen.video")
     private let audioQueue = DispatchQueue(label: "dev.miciodev.screen.audio")
 
-    init(display: SCDisplay, outputDir: URL) throws {
+    init(display: SCDisplay, clock: RecordingClock, outputDir: URL) throws {
         displayID = display.displayID
         // True native Retina pixels (SCDisplay.width/height are in points).
         let mode = CGDisplayCopyDisplayMode(display.displayID)
@@ -32,6 +32,9 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
             url: outputDir.appendingPathComponent("system.caf"),
             fileType: .caf, mediaType: .audio,
             outputSettings: SegmentWriter.pcmAudio48k(channels: 2))
+        // SCK sample PTS are already on the host-time clock, so t0 needs no conversion.
+        videoWriter.setSessionStart(clock.t0Host)
+        audioWriter.setSessionStart(clock.t0Host)
 
         let config = SCStreamConfiguration()
         config.width = pixelWidth
@@ -71,7 +74,10 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         switch type {
         case .screen:
-            guard isCompleteFrame(sampleBuffer) else { return } // skip idle/blank frames
+            // Append any frame carrying pixels (including .idle repeats) so the screen
+            // is recorded continuously from t0 — skipping idle frames made screen.mov
+            // start at the first on-screen change, misaligning it from the audio.
+            guard CMSampleBufferGetImageBuffer(sampleBuffer) != nil else { return }
             videoWriter.append(sampleBuffer)
         case .audio:
             audioWriter.append(sampleBuffer)
@@ -82,15 +88,5 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         NSLog("[ScreenCapturer] stopped with error: \(error.localizedDescription)")
-    }
-
-    /// Only append frames the compositor marked `.complete` — idle frames carry no
-    /// new pixels and would otherwise write blank/duplicate content.
-    private func isCompleteFrame(_ sampleBuffer: CMSampleBuffer) -> Bool {
-        guard let arr = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
-            as? [[SCStreamFrameInfo: Any]],
-              let raw = arr.first?[.status] as? Int,
-              let status = SCFrameStatus(rawValue: raw) else { return false }
-        return status == .complete
     }
 }

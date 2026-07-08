@@ -8,8 +8,10 @@ final class CameraCapturer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     private let output = AVCaptureVideoDataOutput()
     private let queue = DispatchQueue(label: "dev.miciodev.camera.video")
     private let writer: SegmentWriter
+    private let t0Host: CMTime
 
-    init(outputDir: URL) throws {
+    init(clock: RecordingClock, outputDir: URL) throws {
+        t0Host = clock.t0Host
         guard let device = AVCaptureDevice.default(for: .video) else {
             throw NSError(domain: "CameraCapturer", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "no webcam available"])
@@ -46,7 +48,14 @@ final class CameraCapturer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         output.setSampleBufferDelegate(self, queue: queue)
     }
 
-    func start() { session.startRunning() }
+    func start() {
+        session.startRunning()
+        // AVCapture PTS are on the session's synchronization clock (may differ from the
+        // host clock). Anchor at t0 converted INTO that clock so this track aligns with
+        // the SCK streams (SPEC §5.2).
+        let syncClock = session.synchronizationClock ?? CMClockGetHostTimeClock()
+        writer.setSessionStart(CMSyncConvertTime(t0Host, from: CMClockGetHostTimeClock(), to: syncClock))
+    }
 
     func stopCapture() { session.stopRunning() }
     func finishWriting() async { await writer.finish() }

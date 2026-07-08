@@ -8,8 +8,10 @@ final class AudioCapturer: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
     private let output = AVCaptureAudioDataOutput()
     private let queue = DispatchQueue(label: "dev.miciodev.mic.audio")
     private let writer: SegmentWriter
+    private let t0Host: CMTime
 
-    init(outputDir: URL) throws {
+    init(clock: RecordingClock, outputDir: URL) throws {
+        t0Host = clock.t0Host
         guard let device = AVCaptureDevice.default(for: .audio) else {
             throw NSError(domain: "AudioCapturer", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "no microphone available"])
@@ -38,7 +40,14 @@ final class AudioCapturer: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
         output.setSampleBufferDelegate(self, queue: queue)
     }
 
-    func start() { session.startRunning() }
+    func start() {
+        session.startRunning()
+        // The mic session's clock is typically the audio device clock, offset from the
+        // host clock. Anchor at t0 converted into that clock so mic.caf aligns with the
+        // screen (SPEC §5.2) — this is the fix for the multi-second mic drift.
+        let syncClock = session.synchronizationClock ?? CMClockGetHostTimeClock()
+        writer.setSessionStart(CMSyncConvertTime(t0Host, from: CMClockGetHostTimeClock(), to: syncClock))
+    }
 
     func stopCapture() { session.stopRunning() }
     func finishWriting() async { await writer.finish() }

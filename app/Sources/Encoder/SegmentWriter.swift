@@ -8,6 +8,11 @@ final class SegmentWriter: @unchecked Sendable {
     let url: URL
     private let writer: AVAssetWriter
     private let input: AVAssetWriterInput
+    /// Shared recording origin t0, expressed in THIS track's own sample clock (SPEC
+    /// §5.2). All tracks anchor at the same real instant, so their timelines and
+    /// durations align even when devices (mic) run on clocks offset from the host.
+    /// Set once via `setSessionStart` after the source's clock is known.
+    private var sessionStart: CMTime?
     private var started = false
     private(set) var droppedSamples = 0
 
@@ -25,18 +30,23 @@ final class SegmentWriter: @unchecked Sendable {
         writer.add(input)
     }
 
-    /// Append a sample. The session starts at THIS track's first sample PTS — never a
-    /// shared t0. Capture devices (mic, camera) can run on clocks offset from the host
-    /// clock; anchoring at a shared t0 injected seconds of leading silence/black.
-    /// Per-track first-sample anchoring gives each file its true captured span.
-    /// Drops samples when the input isn't ready (back-pressure) rather than growing memory.
+    /// Anchor this track's timeline at `t0` (already converted into this source's
+    /// sample clock). Must be called before the first `append`.
+    func setSessionStart(_ t0: CMTime) { sessionStart = t0 }
+
+    /// Append a sample. The session starts at the shared origin `sessionStart` (or, as
+    /// a fallback, this sample's PTS). Samples that predate the origin are dropped so
+    /// AVAssetWriter never sees a PTS before the session start. Drops under back-pressure.
     func append(_ sample: CMSampleBuffer) {
         guard CMSampleBufferDataIsReady(sample) else { return }
+        let pts = CMSampleBufferGetPresentationTimeStamp(sample)
         if !started {
+            let anchor = sessionStart ?? pts
             guard writer.startWriting() else { return }
-            writer.startSession(atSourceTime: CMSampleBufferGetPresentationTimeStamp(sample))
+            writer.startSession(atSourceTime: anchor)
             started = true
         }
+        if let start = sessionStart, pts < start { return } // predates t0 — drop
         guard writer.status == .writing, input.isReadyForMoreMediaData else {
             droppedSamples += 1
             return

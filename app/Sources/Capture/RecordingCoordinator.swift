@@ -59,12 +59,12 @@ final class RecordingCoordinator: ObservableObject {
             let dir = try makeOutputDir()
             currentDir = dir
 
-            let screen = try ScreenCapturer(display: display, outputDir: dir)
-            let camera = try? CameraCapturer(outputDir: dir)
-            let mic = try? AudioCapturer(outputDir: dir)
-
-            // Fix t0 as late as possible — right before capture starts (SPEC §5.2).
+            // Fix t0 (the single shared origin, SPEC §5.2) right before building the
+            // capturers, so every writer anchors at the same real instant.
             let clock = RecordingClock()
+            let screen = try ScreenCapturer(display: display, clock: clock, outputDir: dir)
+            let camera = try? CameraCapturer(clock: clock, outputDir: dir)
+            let mic = try? AudioCapturer(clock: clock, outputDir: dir)
             let events = EventTap(clock: clock, displayID: screen.displayID, outputDir: dir)
 
             try await screen.start()

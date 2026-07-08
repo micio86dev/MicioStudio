@@ -101,10 +101,14 @@ if [[ -f "$screen" ]]; then
   else
     afilter=""; amap=()
   fi
+  # H.264 + yuv420p + faststart = opens everywhere (the HEVC/VideoToolbox preview
+  # could produce files QuickTime refused). This is a throwaway preview, not the
+  # authoritative capture (that's screen.mov), so quality is not critical.
   if ffmpeg -y -v error "${inputs[@]}" \
       -filter_complex "${vfilters}${afilter}" \
       -map "$vmap" "${amap[@]}" \
-      -c:v hevc_videotoolbox -b:v 8M -c:a aac -shortest "$out" 2>/tmp/ffmpeg-combined.err; then
+      -c:v libx264 -pix_fmt yuv420p -preset veryfast -crf 20 \
+      -c:a aac -movflags +faststart -shortest "$out" 2>/tmp/ffmpeg-combined.err; then
     ok "combined.mov built ($(probe -select_streams v:0 -show_entries stream=width,height -of csv=p=0:nk=1:s=x "$out"))"
     echo "       open \"$out\" and confirm the click action lines up with the audio"
   else
