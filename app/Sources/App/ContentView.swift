@@ -4,6 +4,7 @@ import AppKit
 struct ContentView: View {
     @StateObject private var recorder = RecordingCoordinator()
     @StateObject private var perms = PermissionManager()
+    @StateObject private var templates = TemplateStore()
 
     var body: some View {
         VStack(spacing: 18) {
@@ -14,6 +15,7 @@ struct ContentView: View {
 
             PermissionsPanel(perms: perms)
             SourcesPanel(recorder: recorder)
+            TemplatesPanel(store: templates)
 
             if recorder.isRecording || recorder.elapsed > 0 {
                 HStack(spacing: 8) {
@@ -75,6 +77,7 @@ struct ContentView: View {
             await perms.refresh()
             await recorder.refreshDisplays()
             recorder.refreshAudioDevices()
+            templates.load()
         }
     }
 
@@ -180,6 +183,38 @@ private struct PermissionsPanel: View {
                 Button(action, action: perform)
                     .controlSize(.small)
             }
+        }
+    }
+}
+
+/// Phase 2: templates persisted in the Rust core's SQLite library.
+private struct TemplatesPanel: View {
+    @ObservedObject var store: TemplateStore
+
+    var body: some View {
+        GroupBox("Templates") {
+            VStack(alignment: .leading, spacing: 6) {
+                if let error = store.error {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                } else if store.templates.isEmpty {
+                    Text("No templates yet").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    ForEach(store.templates, id: \.id) { t in
+                        HStack {
+                            Image(systemName: t.isBuiltin ? "lock.rectangle" : "rectangle.on.rectangle")
+                                .foregroundStyle(.secondary)
+                            Text(t.name)
+                            Spacer()
+                            if t.isBuiltin {
+                                Text("built-in").font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
