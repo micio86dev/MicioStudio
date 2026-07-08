@@ -40,15 +40,16 @@ final class RecordingCoordinator: ObservableObject {
             _ = await AVCaptureDevice.requestAccess(for: .video)
             _ = await AVCaptureDevice.requestAccess(for: .audio)
 
-            let dir = try makeOutputDir()
-            currentDir = dir
-
-            // SCShareableContent enumeration is slow (~seconds); do it BEFORE fixing t0
-            // so the event clock origin sits close to the first captured frame (SPEC §5.2).
+            // Acquire the display FIRST — if Screen Recording isn't granted for THIS
+            // build (ad-hoc signing invalidates the grant on every rebuild), this throws
+            // and we bail out WITHOUT leaving an empty session folder behind.
             let content = try await SCShareableContent.current
             guard let display = content.displays.first else {
-                throw Self.err("No display available. Grant Screen Recording in System Settings, then relaunch.")
+                throw Self.err("No display available — grant Screen Recording for this build in System Settings, then relaunch.")
             }
+
+            let dir = try makeOutputDir()
+            currentDir = dir
 
             let screen = try ScreenCapturer(display: display, outputDir: dir)
             let camera = try? CameraCapturer(outputDir: dir)
@@ -70,8 +71,9 @@ final class RecordingCoordinator: ObservableObject {
             state = .recording
             status = summary(camera: camera != nil, mic: mic != nil, tapOK: tapOK)
         } catch {
+            NSLog("[RecordingCoordinator] start failed: \(error)")
             state = .failed(error.localizedDescription)
-            status = error.localizedDescription
+            status = "Recording failed: \(error.localizedDescription)"
         }
     }
 

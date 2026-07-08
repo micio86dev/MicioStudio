@@ -41,20 +41,24 @@ fi
 
 # --- durations match across present streams (no drift) ---
 echo "  durations:"
-maxd=0; mind=100000
+maxd=0; mind=100000; nstreams=0
 for f in screen.mov camera.mov mic.caf system.caf; do
   [[ -f "$DIR/$f" ]] || continue
   d=$(dur "$DIR/$f"); [[ -z "$d" ]] && continue
   printf '    %-12s %s s\n' "$f" "$d"
-  # track min/max with awk (float)
+  nstreams=$((nstreams + 1))
   maxd=$(awk -v a="$maxd" -v b="$d" 'BEGIN{print (b>a)?b:a}')
   mind=$(awk -v a="$mind" -v b="$d" 'BEGIN{print (b<a)?b:a}')
 done
-spread=$(awk -v mx="$maxd" -v mn="$mind" 'BEGIN{printf "%.3f", mx-mn}')
-# tolerance 0.5s: streams start/stop a fraction apart, but seconds of spread = drift.
-withinTol=$(awk -v s="$spread" 'BEGIN{print (s<=0.5)?"1":"0"}')
-[[ "$withinTol" == "1" ]] && ok "stream durations within 0.5s (spread ${spread}s, no drift)" \
-                          || bad "stream duration spread is ${spread}s (>0.5s → drift/leading-silence bug)"
+if [[ "$nstreams" -eq 0 ]]; then
+  bad "no media streams found — the session is empty (recording failed; check the app's status message)"
+else
+  spread=$(awk -v mx="$maxd" -v mn="$mind" 'BEGIN{printf "%.3f", mx-mn}')
+  # tolerance 0.5s: streams start/stop a fraction apart, but seconds of spread = drift.
+  withinTol=$(awk -v s="$spread" 'BEGIN{print (s<=0.5)?"1":"0"}')
+  [[ "$withinTol" == "1" ]] && ok "stream durations within 0.5s (spread ${spread}s, no drift)" \
+                            || bad "stream duration spread is ${spread}s (>0.5s → drift/leading-silence bug)"
+fi
 
 # --- audio 48kHz ---
 for a in mic.caf system.caf; do
