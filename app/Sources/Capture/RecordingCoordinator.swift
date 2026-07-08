@@ -43,6 +43,9 @@ final class RecordingCoordinator: ObservableObject {
     /// Distinct camera device IDs to capture this session (from the active template's
     /// camera layers). Empty → just the selected webcam. Enables multi-camera capture.
     var activeCameraDeviceIDs: [String] = []
+    /// If set, stop() renders the real composited video (composed.mov) via the Phase 3
+    /// compositor; otherwise it builds the quick ffmpeg side-by-side preview.
+    var activeTemplateDoc: TemplateDoc?
 
     private var screen: ScreenCapturer?
     private var cameras: [CameraCapturer] = []
@@ -156,18 +159,26 @@ final class RecordingCoordinator: ObservableObject {
         // Build + open the side-by-side preview with a progress bar. Failure here does
         // NOT lose the recording — the canonical separate streams are already saved.
         guard let dir else { status = "Saved."; return }
-        status = "Building preview…"
         isExporting = true
         exportProgress = 0
         do {
-            let url = try await exporter.export(sessionDir: dir) { [weak self] p in
-                Task { @MainActor in self?.exportProgress = p }
+            let url: URL
+            if let template = activeTemplateDoc {
+                status = "Composing video…"
+                url = try await TemplateVideoExporter.export(sessionDir: dir, template: template) { [weak self] p in
+                    Task { @MainActor in self?.exportProgress = p }
+                }
+            } else {
+                status = "Building preview…"
+                url = try await exporter.export(sessionDir: dir) { [weak self] p in
+                    Task { @MainActor in self?.exportProgress = p }
+                }
             }
             combinedURL = url
             status = "Saved to \(dir.path)"
-            NSWorkspace.shared.open(url)   // auto-open the preview
+            NSWorkspace.shared.open(url)   // auto-open the result
         } catch {
-            status = "Saved to \(dir.path) (preview failed: \(error))"
+            status = "Saved to \(dir.path) (export failed: \(error))"
         }
         isExporting = false
     }

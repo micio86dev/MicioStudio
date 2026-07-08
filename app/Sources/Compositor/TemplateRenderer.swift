@@ -1,6 +1,7 @@
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import AppKit
+import Metal
 
 /// Phase 3 compositor core: composes the captured sources into one frame per a
 /// template (SPEC §6 Phase 3), bottom→top: background (blurred screen / color /
@@ -8,15 +9,26 @@ import AppKit
 /// Pure rendering (images in → image out) so it drives BOTH the live editor preview
 /// and the video export, and is testable by rendering a single frame.
 enum TemplateRenderer {
-    static let context = CIContext(options: [.useSoftwareRenderer: false])
+    static let context: CIContext = {
+        if let device = MTLCreateSystemDefaultDevice() { return CIContext(mtlDevice: device) }
+        return CIContext(options: [.useSoftwareRenderer: false])
+    }()
 
-    /// Render one composited frame. `cameras` are matched to camera layers in order.
-    /// Missing sources fall back to a flat placeholder so the layout is still visible.
+    /// Render from CGImage sources (editor preview / stills).
     static func render(template: TemplateDoc, screen: CGImage?, cameras: [CGImage],
+                       outputSize: CGSize) -> CIImage {
+        render(template: template, screenCI: screen.map { CIImage(cgImage: $0) },
+               camerasCI: cameras.map { CIImage(cgImage: $0) }, outputSize: outputSize)
+    }
+
+    /// Render one composited frame from CIImage sources (video compositor path).
+    /// `cameras` are matched to camera layers in order. Missing sources fall back to a
+    /// flat placeholder so the layout is still visible.
+    static func render(template: TemplateDoc, screenCI: CIImage?, camerasCI: [CIImage],
                        outputSize: CGSize) -> CIImage {
         let canvas = CGRect(origin: .zero, size: outputSize)
         var result = CIImage(color: CIColor(red: 0.04, green: 0.04, blue: 0.06)).cropped(to: canvas)
-        let screenCI = screen.map { CIImage(cgImage: $0) }
+        let cameras = camerasCI
         var cameraIndex = 0
 
         for layer in template.layers {
@@ -28,7 +40,7 @@ enum TemplateRenderer {
                 result = framed(img, rect: r, cornerRadius: layer.cornerRadius ?? 0,
                                 shadow: layer.shadow, mirror: false, canvas: outputSize).composited(over: result)
             case .camera:
-                let img = cameraIndex < cameras.count ? CIImage(cgImage: cameras[cameraIndex])
+                let img = cameraIndex < cameras.count ? cameras[cameraIndex]
                                                       : (placeholder(.systemGreen, outputSize) ?? screenCI ?? CIImage.empty())
                 cameraIndex += 1
                 guard let r = layer.rect else { continue }

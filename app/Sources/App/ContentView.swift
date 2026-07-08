@@ -40,6 +40,9 @@ struct ContentView: View {
                 .disabled(recorder.isRecording || recorder.isBusy)
                 .onChange(of: activeTemplateID) { _, id in
                     recorder.activeCameraDeviceIDs = id.map { templates.cameraDeviceIDs(templateID: $0) } ?? []
+                    recorder.activeTemplateDoc = id.flatMap { tid in
+                        templates.templates.first(where: { $0.id == tid }).map { templates.doc(for: $0) }
+                    }
                 }
             }
 
