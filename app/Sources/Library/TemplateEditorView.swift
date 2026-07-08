@@ -153,59 +153,82 @@ private struct DraggableLayer: View {
     let onSelect: () -> Void
     let onChange: (RectN) -> Void
 
-    @State private var startRect: RectN?
+    // Transient gesture translations. Applied VISUALLY during the drag and committed to
+    // the document only on release — so `doc` isn't mutated every frame (that caused the
+    // whole editor to re-render and flicker).
+    @GestureState private var moveT: CGSize = .zero
+    @GestureState private var resizeT: CGSize = .zero
 
     private let minSize = 0.05
 
     var body: some View {
-        let r = layer.rect ?? RectN(x: 0, y: 0, w: 0.1, h: 0.1)
-        let w = CGFloat(r.w) * canvas.width
-        let h = CGFloat(r.h) * canvas.height
+        let base = layer.rect ?? RectN(x: 0, y: 0, w: 0.1, h: 0.1)
+        let eff = effective(base)
+        let w = CGFloat(eff.w) * canvas.width
+        let h = CGFloat(eff.h) * canvas.height
         ZStack(alignment: .bottomTrailing) {
             RoundedRectangle(cornerRadius: 6)
                 .fill(color.opacity(0.28))
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(color, lineWidth: selected ? 2.5 : 1))
                 .overlay(Text(layer.kind.label).font(.caption2).foregroundStyle(.white))
                 .contentShape(Rectangle())
-                .gesture(moveGesture(base: r))
+                .gesture(
+                    DragGesture()
+                        .updating($moveT) { v, s, _ in s = v.translation }
+                        .onEnded { v in onSelect(); onChange(moved(base, by: v.translation)) }
+                )
+                .onTapGesture { onSelect() }
             if selected {
-                // bottom-right resize handle
                 Circle().fill(.white).overlay(Circle().stroke(color, lineWidth: 2))
                     .frame(width: 14, height: 14)
                     .offset(x: 7, y: 7)
-                    .gesture(resizeGesture(base: r))
+                    .gesture(
+                        DragGesture()
+                            .updating($resizeT) { v, s, _ in s = v.translation }
+                            .onEnded { v in onSelect(); onChange(resized(base, by: v.translation, free: freeResize)) }
+                    )
             }
         }
         .frame(width: max(w, 8), height: max(h, 8))
-        .position(x: CGFloat(r.x) * canvas.width + w / 2, y: CGFloat(r.y) * canvas.height + h / 2)
-        .onTapGesture { onSelect() }
+        .position(x: CGFloat(eff.x) * canvas.width + w / 2, y: CGFloat(eff.y) * canvas.height + h / 2)
     }
 
-    private func moveGesture(base r: RectN) -> some Gesture {
-        DragGesture()
-            .onChanged { value in
-                onSelect()
-                let base = startRect ?? r
-                if startRect == nil { startRect = r }
-                var nr = base
-                nr.x = min(max(0, base.x + Double(value.translation.width / canvas.width)), 1 - base.w)
-                nr.y = min(max(0, base.y + Double(value.translation.height / canvas.height)), 1 - base.h)
-                onChange(nr)
-            }
-            .onEnded { _ in startRect = nil }
+    /// Hold Option while resizing to free-resize (crop, via the renderer's aspect-fill)
+    /// instead of keeping the source aspect ratio.
+    private var freeResize: Bool { NSEvent.modifierFlags.contains(.option) }
+
+    /// Base rect with the live (uncommitted) move/resize translation applied. Only one
+    /// gesture is active at a time.
+    private func effective(_ base: RectN) -> RectN {
+        if resizeT != .zero { return resized(base, by: resizeT, free: freeResize) }
+        return moved(base, by: moveT)
     }
 
-    private func resizeGesture(base r: RectN) -> some Gesture {
-        DragGesture()
-            .onChanged { value in
-                let base = startRect ?? r
-                if startRect == nil { startRect = r }
-                var nr = base
-                nr.w = min(max(minSize, base.w + Double(value.translation.width / canvas.width)), 1 - base.x)
-                nr.h = min(max(minSize, base.h + Double(value.translation.height / canvas.height)), 1 - base.y)
-                onChange(nr)
-            }
-            .onEnded { _ in startRect = nil }
+    private func moved(_ base: RectN, by t: CGSize) -> RectN {
+        var r = base
+        r.x = min(max(0, base.x + Double(t.width / canvas.width)), 1 - base.w)
+        r.y = min(max(0, base.y + Double(t.height / canvas.height)), 1 - base.h)
+        return r
+    }
+
+    /// Resize. Default keeps the rect's w:h ratio (no distortion); `free` (Option held)
+    /// resizes each axis independently so the source is cropped by the renderer.
+    private func resized(_ base: RectN, by t: CGSize, free: Bool) -> RectN {
+        if free {
+            var r = base
+            r.w = min(max(minSize, base.w + Double(t.width / canvas.width)), 1 - base.x)
+            r.h = min(max(minSize, base.h + Double(t.height / canvas.height)), 1 - base.y)
+            return r
+        }
+        let aspect = base.w / max(base.h, 0.0001)
+        var w = max(minSize, base.w + Double(t.width / canvas.width))
+        var h = w / aspect
+        if base.x + w > 1 { w = 1 - base.x; h = w / aspect }
+        if base.y + h > 1 { h = 1 - base.y; w = h * aspect }
+        var r = base
+        r.w = max(minSize, w)
+        r.h = max(minSize, h)
+        return r
     }
 
     private var color: Color {
@@ -272,8 +295,8 @@ private struct LayerPanel: View {
         var layer = Layer(kind: kind)
         switch kind {
         case .background: layer.source = .color; layer.color = "#0B0B0F"
-        case .screen, .camera: layer.rect = RectN(x: 0.25, y: 0.25, w: 0.4, h: 0.4); layer.cornerRadius = 12
-        case .image: layer.rect = RectN(x: 0.4, y: 0.4, w: 0.2, h: 0.12); layer.opacity = 1; layer.path = ""
+        case .screen, .camera: layer.rect = RectN(x: 0.25, y: 0.25, w: 0.4, h: 0.225); layer.cornerRadius = 12 // 16:9
+        case .image: layer.rect = RectN(x: 0.4, y: 0.4, w: 0.2, h: 0.15); layer.opacity = 1; layer.path = ""
         }
         doc.layers.append(layer)
         selection = layer.id
