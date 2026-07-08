@@ -46,6 +46,7 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
         config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange // '420v'
         config.showsCursor = false
         config.capturesAudio = true
+        config.excludesCurrentProcessAudio = false // capture the soundboard's own playback too
         config.sampleRate = 48_000
         config.channelCount = 2
         config.minimumFrameInterval = CMTime(value: 1, timescale: 30) // 30fps dev loop

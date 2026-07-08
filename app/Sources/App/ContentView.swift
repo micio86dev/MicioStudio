@@ -9,6 +9,7 @@ struct ContentView: View {
     @StateObject private var recorder = RecordingCoordinator()
     @StateObject private var perms = PermissionManager()
     @StateObject private var templates = TemplateStore()
+    @StateObject private var soundboard = Soundboard()
     @State private var activeTemplateID: String?
     @State private var liveDoc: TemplateDoc?
     @State private var liveSelection: UUID?
@@ -124,6 +125,8 @@ struct ContentView: View {
                 }
 
                 AudioControls(recorder: recorder)
+
+                SoundboardPanel(board: soundboard)
 
                 if recorder.isRecording || recorder.elapsed > 0 {
                     HStack(spacing: 8) {
