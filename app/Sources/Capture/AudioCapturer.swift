@@ -30,6 +30,18 @@ final class AudioCapturer: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
                           userInfo: [NSLocalizedDescriptionKey: "cannot add mic output"])
         }
         session.addOutput(output)
+        // Deliver already-converted 16-bit mono 48kHz LPCM. Without this the device's
+        // native format (typically 32-bit float) reached the 16-bit writer and was
+        // written as broadband NOISE (float bytes reinterpreted as int16).
+        output.audioSettings = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: 48_000,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+        ]
         session.commitConfiguration()
 
         writer = try SegmentWriter(
