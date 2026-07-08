@@ -2,6 +2,7 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import AppKit
 import Metal
+import Vision
 
 /// Phase 3 compositor core: composes the captured sources into one frame per a
 /// template (SPEC §6 Phase 3), bottom→top: background (blurred screen / color /
@@ -40,9 +41,12 @@ enum TemplateRenderer {
                 result = framed(img, rect: r, cornerRadius: layer.cornerRadius ?? 0,
                                 shadow: layer.shadow, mirror: false, canvas: outputSize).composited(over: result)
             case .camera:
-                let img = cameraIndex < cameras.count ? cameras[cameraIndex]
+                var img = cameraIndex < cameras.count ? cameras[cameraIndex]
                                                       : (placeholder(.systemGreen, outputSize) ?? screenCI ?? CIImage.empty())
                 cameraIndex += 1
+                if let mode = layer.bgMode, mode != "none" {
+                    img = virtualBackground(img, mode: mode, imagePath: layer.bgImage) ?? img
+                }
                 guard let r = layer.rect else { continue }
                 result = framed(img, rect: r, cornerRadius: layer.cornerRadius ?? 0,
                                 shadow: layer.shadow, mirror: layer.mirror ?? false, canvas: outputSize).composited(over: result)
@@ -121,6 +125,44 @@ enum TemplateRenderer {
             return placed.composited(over: shape)
         }
         return placed
+    }
+
+    // MARK: - Virtual background (webcam)
+
+    /// Replace the camera background: keep the segmented person, put a blurred version of
+    /// the feed (3 intensities) or a cover image behind them. Falls back to nil if
+    /// segmentation is unavailable (caller keeps the raw frame).
+    private static func virtualBackground(_ image: CIImage, mode: String, imagePath: String?) -> CIImage? {
+        guard let mask = personMask(image) else { return nil }
+        let ext = image.extent
+        guard mask.extent.width > 0, mask.extent.height > 0 else { return nil }
+        let scaled = mask.transformed(by: CGAffineTransform(
+            scaleX: ext.width / mask.extent.width, y: ext.height / mask.extent.height))
+
+        let bg: CIImage
+        if mode == "image",
+           let p = imagePath.map({ ($0 as NSString).expandingTildeInPath }),
+           let ns = NSImage(contentsOfFile: p),
+           let cg = ns.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            bg = aspectFill(CIImage(cgImage: cg), into: ext)
+        } else {
+            let radius: CGFloat = mode == "blurStrong" ? 34 : (mode == "blurMedium" ? 18 : 8)
+            bg = image.clampedToExtent()
+                .applyingFilter("CIGaussianBlur", parameters: ["inputRadius": radius])
+                .cropped(to: ext)
+        }
+        return image.applyingFilter("CIBlendWithMask", parameters: [
+            "inputBackgroundImage": bg, "inputMaskImage": scaled])
+    }
+
+    private static func personMask(_ image: CIImage) -> CIImage? {
+        let req = VNGeneratePersonSegmentationRequest()
+        req.qualityLevel = .balanced
+        req.outputPixelFormat = kCVPixelFormatType_OneComponent8
+        let handler = VNImageRequestHandler(ciImage: image, options: [:])
+        do { try handler.perform([req]) } catch { return nil }
+        guard let buffer = req.results?.first?.pixelBuffer else { return nil }
+        return CIImage(cvPixelBuffer: buffer)
     }
 
     // MARK: - Helpers

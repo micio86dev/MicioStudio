@@ -428,6 +428,20 @@ struct Inspector: View {
                 slider("Corner radius", Binding(get: { layer.cornerRadius ?? 0 }, set: { layer.cornerRadius = $0 }), 0...64)
                 if layer.kind == .camera {
                     Toggle("Mirror", isOn: Binding(get: { layer.mirror ?? false }, set: { layer.mirror = $0 }))
+                    Picker("Background", selection: Binding(
+                        get: { layer.bgMode ?? "none" }, set: { layer.bgMode = $0 })) {
+                        Text("Original").tag("none")
+                        Text("Blur (light)").tag("blurLight")
+                        Text("Blur (medium)").tag("blurMedium")
+                        Text("Blur (strong)").tag("blurStrong")
+                        Text("Cover image").tag("image")
+                    }
+                    .font(.caption)
+                    if layer.bgMode == "image" {
+                        TextField("Cover image path", text: Binding(
+                            get: { layer.bgImage ?? "" }, set: { layer.bgImage = $0 }))
+                            .textFieldStyle(.roundedBorder)
+                    }
                 }
             case .image:
                 slider("Opacity", Binding(get: { layer.opacity ?? 1 }, set: { layer.opacity = $0 }), 0...1)

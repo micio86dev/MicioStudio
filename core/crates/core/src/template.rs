@@ -117,6 +117,12 @@ pub struct CameraLayer {
     /// Which camera feeds this layer (AVCaptureDevice uniqueID). None = default camera.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
+    /// Virtual background: none | blurLight | blurMedium | blurStrong | image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg_mode: Option<String>,
+    /// Cover image path when bg_mode == image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bg_image: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
