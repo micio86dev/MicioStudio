@@ -21,3 +21,6 @@ xcuserdata/
 
 # Recordings produced by the app during manual gate runs
 /RecordingsOut/
+
+# build artifacts
+/dist/
