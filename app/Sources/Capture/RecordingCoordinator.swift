@@ -47,6 +47,19 @@ final class RecordingCoordinator: ObservableObject {
     /// compositor; otherwise it builds the quick ffmpeg side-by-side preview.
     var activeTemplateDoc: TemplateDoc?
 
+    /// A scene switch during recording (relative to t0), applied with `transition` in the
+    /// export. `transition` ∈ cut | fade | slide | swipe.
+    struct SceneSwitch: Codable { let tMs: Int; let sceneIndex: Int; let transition: String }
+    private(set) var sceneTimeline: [SceneSwitch] = []
+
+    /// Called by the UI (scene chip / number-key shortcut) while recording; records when
+    /// the user switched scenes so the export can reproduce it with a transition.
+    func recordSceneSwitch(to index: Int, transition: String) {
+        guard isRecording, let start = startDate else { return }
+        let ms = Int(Date().timeIntervalSince(start) * 1000)
+        sceneTimeline.append(SceneSwitch(tMs: ms, sceneIndex: index, transition: transition))
+    }
+
     private var screen: ScreenCapturer?
     private var cameras: [CameraCapturer] = []
     private var mic: AudioCapturer?
@@ -126,6 +139,7 @@ final class RecordingCoordinator: ObservableObject {
             state = .recording
             status = summary(cameras: cameras.count, mic: mic != nil, tapOK: tapOK)
             startTicker()
+            sceneTimeline = [SceneSwitch(tMs: 0, sceneIndex: activeTemplateDoc?.activeSceneIndex ?? 0, transition: "cut")]
         } catch {
             NSLog("[RecordingCoordinator] start failed: \(error)")
             state = .failed(error.localizedDescription)
@@ -161,11 +175,12 @@ final class RecordingCoordinator: ObservableObject {
         guard let dir else { status = "Saved."; return }
         isExporting = true
         exportProgress = 0
+        let timeline = sceneTimeline
         do {
             let url: URL
             if let template = activeTemplateDoc {
                 status = "Composing video…"
-                url = try await TemplateVideoExporter.export(sessionDir: dir, template: template) { [weak self] p in
+                url = try await TemplateVideoExporter.export(sessionDir: dir, template: template, timeline: timeline) { [weak self] p in
                     Task { @MainActor in self?.exportProgress = p }
                 }
             } else {

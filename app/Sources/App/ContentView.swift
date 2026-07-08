@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var activeTemplateID: String?
     @State private var liveDoc: TemplateDoc?
     @State private var liveSelection: UUID?
+    @State private var transition = "fade"   // scene-switch transition: cut | fade | slide | swipe
 
     private var cameraOptions: [SourceOption] { recorder.cameraDevices.map { SourceOption(id: $0.id, label: $0.label) } }
     private var screenOptions: [SourceOption] { recorder.displays.map { SourceOption(id: String($0.id), label: $0.label) } }
@@ -54,6 +55,20 @@ struct ContentView: View {
         recorder.activeCameraDeviceIDs = templates.cameraDeviceIDs(templateID: id)
     }
 
+    /// Hidden buttons so number keys 1–9 select scenes (works during recording).
+    private var sceneShortcuts: some View {
+        ForEach(0..<9, id: \.self) { i in
+            Button("") {
+                guard var d = liveDoc, d.scenes.indices.contains(i) else { return }
+                d.activeSceneIndex = i
+                liveDoc = d
+                saveLive()
+            }
+            .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: [])
+            .hidden()
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
@@ -74,7 +89,20 @@ struct ContentView: View {
                 // Studio layout: large editable preview. Drag/resize elements; select one
                 // to change its source (webcam/screen/image) — works during recording too.
                 if liveDoc != nil {
-                    SceneBar(doc: liveBinding)
+                    HStack {
+                        SceneBar(doc: liveBinding)
+                        Picker("", selection: $transition) {
+                            Text("Cut").tag("cut"); Text("Fade").tag("fade")
+                            Text("Slide").tag("slide"); Text("Swipe").tag("swipe")
+                        }
+                        .labelsHidden().frame(width: 90)
+                        .help("Transition used when switching scenes")
+                    }
+                    // Number keys 1–9 switch scenes (recorded during capture).
+                    .background(sceneShortcuts)
+                    .onChange(of: liveDoc?.activeSceneIndex) { _, idx in
+                        if let idx, recorder.isRecording { recorder.recordSceneSwitch(to: idx, transition: transition) }
+                    }
                     CanvasView(doc: liveBinding, selection: $liveSelection)
                         .frame(minHeight: 320, maxHeight: 460)
                         .background(Color.black)
