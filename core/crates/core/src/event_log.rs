@@ -134,6 +134,7 @@ mod tests {
         let text = "{\"t_ms\":0,\"x\":0.0,\"y\":0.0,\"kind\":\"Click\"}\nNOT JSON\n".to_string();
         match parse_events_jsonl(text).unwrap_err() {
             CoreError::Parse { line, .. } => assert_eq!(line, 2),
+            other => panic!("expected Parse error, got {other:?}"),
         }
     }
 

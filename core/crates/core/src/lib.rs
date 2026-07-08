@@ -7,9 +7,13 @@ uniffi::setup_scaffolding!();
 
 mod error;
 mod event_log;
+mod library;
+mod template;
 
 pub use error::CoreError;
+pub use library::{Library, TemplateRow};
 pub use event_log::{
     append_event_line, parse_events_jsonl, serialize_events_jsonl, sort_by_t_ms, EventKind,
     InputEvent,
 };
+pub use template::{normalize_template_json, validate_template_json};
