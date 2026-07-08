@@ -187,13 +187,26 @@ private struct PermissionsPanel: View {
     }
 }
 
-/// Phase 2: templates persisted in the Rust core's SQLite library.
+/// Phase 2: templates persisted in the Rust core's SQLite library, with a visual editor.
 private struct TemplatesPanel: View {
     @ObservedObject var store: TemplateStore
+    @State private var editing: EditTarget?
+
+    struct EditTarget: Identifiable {
+        let id: String
+        let name: String
+        let doc: TemplateDoc
+        let isBuiltin: Bool
+    }
 
     var body: some View {
         GroupBox("Templates") {
             VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Spacer()
+                    Button { newTemplate() } label: { Label("New", systemImage: "plus") }
+                        .controlSize(.small)
+                }
                 if let error = store.error {
                     Label(error, systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(.orange)
@@ -205,9 +218,14 @@ private struct TemplatesPanel: View {
                             Image(systemName: t.isBuiltin ? "lock.rectangle" : "rectangle.on.rectangle")
                                 .foregroundStyle(.secondary)
                             Text(t.name)
+                            if t.isBuiltin { Text("built-in").font(.caption2).foregroundStyle(.secondary) }
                             Spacer()
-                            if t.isBuiltin {
-                                Text("built-in").font(.caption2).foregroundStyle(.secondary)
+                            Button("Edit") { edit(t) }.controlSize(.small)
+                            if !t.isBuiltin {
+                                Button(role: .destructive) { store.delete(id: t.id) } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
                             }
                         }
                     }
@@ -216,6 +234,19 @@ private struct TemplatesPanel: View {
             .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .sheet(item: $editing) { target in
+            TemplateEditorView(store: store, templateID: target.id, isBuiltin: target.isBuiltin,
+                               name: target.name, doc: target.doc)
+        }
+    }
+
+    private func newTemplate() {
+        let n = store.makeNew()
+        editing = EditTarget(id: n.id, name: n.name, doc: n.doc, isBuiltin: false)
+    }
+
+    private func edit(_ row: TemplateRow) {
+        editing = EditTarget(id: row.id, name: row.name, doc: store.doc(for: row), isBuiltin: row.isBuiltin)
     }
 }
 

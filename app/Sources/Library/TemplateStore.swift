@@ -24,6 +24,32 @@ final class TemplateStore: ObservableObject {
         }
     }
 
+    /// Validate (via the core) and persist a template. Returns nothing; throws on invalid.
+    func save(id: String, name: String, doc: TemplateDoc, isBuiltin: Bool) throws {
+        guard let lib = library else { return }
+        let normalized = try normalizeTemplateJson(json: try doc.jsonString()) // core validates
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let createdAt = (try? lib.getTemplate(id: id))??.createdAt ?? now
+        try lib.upsertTemplate(row: TemplateRow(
+            id: id, name: name, definition: normalized, isBuiltin: isBuiltin,
+            createdAt: createdAt, updatedAt: now))
+        load()
+    }
+
+    func delete(id: String) {
+        try? library?.deleteTemplate(id: id)
+        load()
+    }
+
+    /// A fresh, unsaved template with a new id.
+    func makeNew() -> (id: String, name: String, doc: TemplateDoc) {
+        ("tpl-\(UUID().uuidString.prefix(8))", "New Template", .default)
+    }
+
+    func doc(for row: TemplateRow) -> TemplateDoc {
+        (try? TemplateDoc.parse(row.definition)) ?? .default
+    }
+
     private func seedBuiltins(into lib: Library) throws {
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         // normalize = parse + validate + pretty-print in the core; throws if invalid.
