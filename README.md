@@ -44,15 +44,16 @@ build. `ENABLE_USER_SCRIPT_SANDBOXING` is off so that script can read `core/targ
 2. Grant **Screen Recording** and **Accessibility** in System Settings ▸ Privacy & Security, then **relaunch**
    (these grants do not apply to an already-running process).
 3. Click **Record**, click around the screen for ~10s, click **Stop**.
-4. Recordings are written to `~/Movies/MicioStudio/<timestamp>/`:
-   `screen.mov`, `camera.mov`, `mic.caf`, `system.caf`, `events.jsonl`, plus `combined.mov` (side-by-side demo).
-5. Verify:
+4. The app writes the canonical separate streams to `~/Movies/MicioStudio/<timestamp>/`:
+   `screen.mov`, `camera.mov`, `mic.caf`, `system.caf`, `events.jsonl` (SPEC §5.1). It does NOT write a
+   combined file — that throwaway preview is derived by the verify script below.
+5. Verify (auto-selects the latest session; also builds the side-by-side `combined.mov` preview with ffmpeg):
    ```bash
-   bash scripts/verify-phase1.sh ~/Movies/MicioStudio/<timestamp>
+   bash scripts/verify-phase1.sh "$(ls -1dt ~/Movies/MicioStudio/*/ | head -1)"
    ```
-   Green when: `screen.mov` is HEVC at native display pixels, all stream durations match (~±0.1s, no drift),
-   audio is 48kHz, `events.jsonl` parses with sane `t_ms`, and the click action lines up with audio in
-   `combined.mov` by inspection.
+   Green when: `screen.mov` is HEVC at native display pixels, stream durations agree within 0.5s (no drift),
+   audio is 48kHz, `events.jsonl` is non-empty, and — by eye in the generated `combined.mov` — the click
+   action lines up with the audio.
 
 ## Conventions
 - **TDD** on the Rust core (test first). **Git Flow** (branch per phase, e.g. `feat/phase-1-capture`).

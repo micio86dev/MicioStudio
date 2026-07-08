@@ -17,7 +17,7 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
     private let videoQueue = DispatchQueue(label: "dev.miciodev.screen.video")
     private let audioQueue = DispatchQueue(label: "dev.miciodev.screen.audio")
 
-    init(display: SCDisplay, clock: RecordingClock, outputDir: URL) throws {
+    init(display: SCDisplay, outputDir: URL) throws {
         displayID = display.displayID
         // True native Retina pixels (SCDisplay.width/height are in points).
         let mode = CGDisplayCopyDisplayMode(display.displayID)
@@ -27,13 +27,11 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
         videoWriter = try SegmentWriter(
             url: outputDir.appendingPathComponent("screen.mov"),
             fileType: .mov, mediaType: .video,
-            outputSettings: SegmentWriter.hevcVideo(width: pixelWidth, height: pixelHeight),
-            sessionStart: clock.t0Host)
+            outputSettings: SegmentWriter.hevcVideo(width: pixelWidth, height: pixelHeight))
         audioWriter = try SegmentWriter(
             url: outputDir.appendingPathComponent("system.caf"),
             fileType: .caf, mediaType: .audio,
-            outputSettings: SegmentWriter.pcmAudio48k(channels: 2),
-            sessionStart: clock.t0Host)
+            outputSettings: SegmentWriter.pcmAudio48k(channels: 2))
 
         let config = SCStreamConfiguration()
         config.width = pixelWidth

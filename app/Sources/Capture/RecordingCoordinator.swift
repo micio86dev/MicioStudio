@@ -43,17 +43,19 @@ final class RecordingCoordinator: ObservableObject {
             let dir = try makeOutputDir()
             currentDir = dir
 
-            // Fix t0 NOW — before any capture starts (SPEC §5.2).
-            let clock = RecordingClock()
-
+            // SCShareableContent enumeration is slow (~seconds); do it BEFORE fixing t0
+            // so the event clock origin sits close to the first captured frame (SPEC §5.2).
             let content = try await SCShareableContent.current
             guard let display = content.displays.first else {
                 throw Self.err("No display available. Grant Screen Recording in System Settings, then relaunch.")
             }
 
-            let screen = try ScreenCapturer(display: display, clock: clock, outputDir: dir)
-            let camera = try? CameraCapturer(clock: clock, outputDir: dir)
-            let mic = try? AudioCapturer(clock: clock, outputDir: dir)
+            let screen = try ScreenCapturer(display: display, outputDir: dir)
+            let camera = try? CameraCapturer(outputDir: dir)
+            let mic = try? AudioCapturer(outputDir: dir)
+
+            // Fix t0 as late as possible — right before capture starts (SPEC §5.2).
+            let clock = RecordingClock()
             let events = EventTap(clock: clock, displayID: screen.displayID, outputDir: dir)
 
             try await screen.start()
@@ -85,20 +87,10 @@ final class RecordingCoordinator: ObservableObject {
         screen = nil; camera = nil; mic = nil; events = nil
         lastOutputDir = dir
 
-        // Build the throwaway side-by-side gate artifact. Failure here does NOT fail
-        // the recording — the separate streams are the canonical output (SPEC §7).
-        if let dir {
-            status = "Building combined.mov…"
-            do {
-                _ = try await SideBySideExporter.export(sessionDir: dir)
-                status = "Saved to \(dir.path)"
-            } catch {
-                status = "Saved to \(dir.path) (combined.mov skipped: \(error.localizedDescription))"
-            }
-        } else {
-            status = "Saved."
-        }
+        // The app writes ONLY the canonical separate streams (SPEC §5.1). The throwaway
+        // side-by-side preview (combined.mov) is derived by scripts/verify-phase1.sh.
         state = .idle
+        status = dir.map { "Saved to \($0.path)" } ?? "Saved."
     }
 
     // MARK: - Helpers

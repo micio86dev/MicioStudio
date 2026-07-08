@@ -9,7 +9,7 @@ final class AudioCapturer: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
     private let queue = DispatchQueue(label: "dev.miciodev.mic.audio")
     private let writer: SegmentWriter
 
-    init(clock: RecordingClock, outputDir: URL) throws {
+    init(outputDir: URL) throws {
         guard let device = AVCaptureDevice.default(for: .audio) else {
             throw NSError(domain: "AudioCapturer", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "no microphone available"])
@@ -32,8 +32,7 @@ final class AudioCapturer: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
         writer = try SegmentWriter(
             url: outputDir.appendingPathComponent("mic.caf"),
             fileType: .caf, mediaType: .audio,
-            outputSettings: SegmentWriter.pcmAudio48k(channels: 1),
-            sessionStart: clock.t0Host)
+            outputSettings: SegmentWriter.pcmAudio48k(channels: 1))
 
         super.init()
         output.setSampleBufferDelegate(self, queue: queue)

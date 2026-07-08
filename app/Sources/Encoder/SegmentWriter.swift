@@ -8,15 +8,11 @@ final class SegmentWriter: @unchecked Sendable {
     let url: URL
     private let writer: AVAssetWriter
     private let input: AVAssetWriterInput
-    /// Shared timeline origin (= t0 host time). Anchoring every track here means
-    /// screen/camera/mic/system and events.jsonl all share ONE origin (SPEC §5.2).
-    private let sessionStart: CMTime
     private var started = false
     private(set) var droppedSamples = 0
 
-    init(url: URL, fileType: AVFileType, mediaType: AVMediaType, outputSettings: [String: Any], sessionStart: CMTime) throws {
+    init(url: URL, fileType: AVFileType, mediaType: AVMediaType, outputSettings: [String: Any]) throws {
         self.url = url
-        self.sessionStart = sessionStart
         writer = try AVAssetWriter(outputURL: url, fileType: fileType)
         input = AVAssetWriterInput(mediaType: mediaType, outputSettings: outputSettings)
         // Real-time source: honor back-pressure instead of buffering (memory-critical
@@ -29,14 +25,16 @@ final class SegmentWriter: @unchecked Sendable {
         writer.add(input)
     }
 
-    /// Append a sample. Starts the writer session on the first sample using its PTS,
-    /// so every track shares the same source-time origin. Drops samples when the
-    /// input isn't ready (back-pressure) rather than growing memory.
+    /// Append a sample. The session starts at THIS track's first sample PTS — never a
+    /// shared t0. Capture devices (mic, camera) can run on clocks offset from the host
+    /// clock; anchoring at a shared t0 injected seconds of leading silence/black.
+    /// Per-track first-sample anchoring gives each file its true captured span.
+    /// Drops samples when the input isn't ready (back-pressure) rather than growing memory.
     func append(_ sample: CMSampleBuffer) {
         guard CMSampleBufferDataIsReady(sample) else { return }
         if !started {
             guard writer.startWriting() else { return }
-            writer.startSession(atSourceTime: sessionStart)
+            writer.startSession(atSourceTime: CMSampleBufferGetPresentationTimeStamp(sample))
             started = true
         }
         guard writer.status == .writing, input.isReadyForMoreMediaData else {

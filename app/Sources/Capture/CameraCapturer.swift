@@ -9,7 +9,7 @@ final class CameraCapturer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     private let queue = DispatchQueue(label: "dev.miciodev.camera.video")
     private let writer: SegmentWriter
 
-    init(clock: RecordingClock, outputDir: URL) throws {
+    init(outputDir: URL) throws {
         guard let device = AVCaptureDevice.default(for: .video) else {
             throw NSError(domain: "CameraCapturer", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "no webcam available"])
@@ -39,8 +39,7 @@ final class CameraCapturer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         writer = try SegmentWriter(
             url: outputDir.appendingPathComponent("camera.mov"),
             fileType: .mov, mediaType: .video,
-            outputSettings: SegmentWriter.hevcVideo(width: Int(dims.width), height: Int(dims.height)),
-            sessionStart: clock.t0Host)
+            outputSettings: SegmentWriter.hevcVideo(width: Int(dims.width), height: Int(dims.height)))
 
         super.init()
         // Delegate can only be set after super.init (needs self).
