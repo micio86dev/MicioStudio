@@ -1,0 +1,5 @@
+[bindings.swift]
+# Swift import name for the generated bindings (app/Generated/MicioCore.swift).
+module_name = "MicioCore"
+# Name of the linked native library (libmicio_core.a / .dylib).
+cdylib_name = "micio_core"

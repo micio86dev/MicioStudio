@@ -1,0 +1,50 @@
+name: MicioStudio
+options:
+  bundleIdPrefix: dev.miciodev
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    PRODUCT_BUNDLE_IDENTIFIER: dev.miciodev.MicioStudio
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "6.0"
+
+targets:
+  MicioStudio:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+      - path: Config.swift
+      - path: Generated            # UniFFI output; produced by scripts/build-core.sh before `xcodegen generate`
+    settings:
+      base:
+        PRODUCT_NAME: MicioStudio
+        INFOPLIST_FILE: Info.plist
+        CODE_SIGN_ENTITLEMENTS: MicioStudio.entitlements
+        ENABLE_HARDENED_RUNTIME: YES
+        # macOS 26 sandboxes script phases by default; our pre-build script must
+        # read core/target and write app/Generated, so disable it.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        CODE_SIGN_IDENTITY: "-"      # ad-hoc local signing (no dev team needed)
+        CODE_SIGN_STYLE: Manual
+        # Link the Rust static lib.
+        LIBRARY_SEARCH_PATHS:
+          - $(inherited)
+          - $(SRCROOT)/../core/target/release
+        OTHER_LDFLAGS:
+          - -lmicio_core
+        # Make the generated `import micio_coreFFI` resolvable by explicitly
+        # loading the generated Clang modulemap (survives regeneration; no edits
+        # to generated files).
+        SWIFT_INCLUDE_PATHS: $(SRCROOT)/Generated
+        OTHER_SWIFT_FLAGS:
+          - -Xcc
+          - -fmodule-map-file=$(SRCROOT)/Generated/MicioCoreFFI.modulemap
+    preBuildScripts:
+      - path: ../scripts/build-core.sh
+        name: "Build Rust core + UniFFI bindings"
+        basedOnDependencyAnalysis: false
