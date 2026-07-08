@@ -151,10 +151,17 @@ enum TemplateRenderer {
     }
 
     private static func ciColor(_ hex: String) -> CIColor {
-        var s = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        var s = hex.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
         if s.count == 3 { s = s.map { "\($0)\($0)" }.joined() }
-        guard let v = UInt32(s, radix: 16), s.count == 6 else { return CIColor(red: 0.04, green: 0.04, blue: 0.06) }
-        return CIColor(red: CGFloat((v >> 16) & 0xFF) / 255, green: CGFloat((v >> 8) & 0xFF) / 255,
-                       blue: CGFloat(v & 0xFF) / 255)
+        guard let v = UInt64(s, radix: 16) else { return CIColor(red: 0.04, green: 0.04, blue: 0.06) }
+        if s.count == 8 {
+            return CIColor(red: CGFloat((v >> 24) & 0xFF) / 255, green: CGFloat((v >> 16) & 0xFF) / 255,
+                           blue: CGFloat((v >> 8) & 0xFF) / 255, alpha: CGFloat(v & 0xFF) / 255)
+        }
+        if s.count == 6 {
+            return CIColor(red: CGFloat((v >> 16) & 0xFF) / 255, green: CGFloat((v >> 8) & 0xFF) / 255,
+                           blue: CGFloat(v & 0xFF) / 255)
+        }
+        return CIColor(red: 0.04, green: 0.04, blue: 0.06)
     }
 }

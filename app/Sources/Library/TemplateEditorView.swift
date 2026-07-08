@@ -2,6 +2,33 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
+extension Color {
+    /// Parse "#RRGGBB", "#RGB", or "#RRGGBBAA".
+    init(hexString: String) {
+        var s = hexString.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
+        if s.count == 3 { s = s.map { "\($0)\($0)" }.joined() }
+        var v: UInt64 = 0
+        Scanner(string: s).scanHexInt64(&v)
+        let r, g, b, a: Double
+        if s.count == 8 {
+            r = Double((v >> 24) & 0xFF) / 255; g = Double((v >> 16) & 0xFF) / 255
+            b = Double((v >> 8) & 0xFF) / 255; a = Double(v & 0xFF) / 255
+        } else {
+            r = Double((v >> 16) & 0xFF) / 255; g = Double((v >> 8) & 0xFF) / 255
+            b = Double(v & 0xFF) / 255; a = 1
+        }
+        self = Color(.sRGB, red: r, green: g, blue: b, opacity: a)
+    }
+
+    /// Format as "#RRGGBBAA".
+    func hexStringRGBA() -> String {
+        let ns = NSColor(self).usingColorSpace(.sRGB) ?? .black
+        return String(format: "#%02X%02X%02X%02X",
+                      Int((ns.redComponent * 255).rounded()), Int((ns.greenComponent * 255).rounded()),
+                      Int((ns.blueComponent * 255).rounded()), Int((ns.alphaComponent * 255).rounded()))
+    }
+}
+
 /// Phase 2 template editor: drag layers on a normalized 0..1 canvas, tweak style, and
 /// save. Validation is delegated to the Rust core (via TemplateStore.save →
 /// normalizeTemplateJson). Supports `.json` export / import (the Phase 2 gate).
@@ -107,7 +134,9 @@ struct TemplateEditorView: View {
 
 // MARK: - Canvas
 
-private struct CanvasView: View {
+/// Editable normalized 0..1 canvas: draggable/resizable layers. Shared by the template
+/// editor and the main-window live layout.
+struct CanvasView: View {
     @Binding var doc: TemplateDoc
     @Binding var selection: UUID?
 
@@ -312,7 +341,9 @@ private struct LayerPanel: View {
     }
 }
 
-private struct Inspector: View {
+/// Per-layer inspector (source, style). Shared by the editor and the main-window
+/// live layout so an element's source can be changed by selecting it — even mid-record.
+struct Inspector: View {
     @Binding var layer: Layer
     var cameras: [SourceOption] = []
     var screens: [SourceOption] = []
@@ -326,7 +357,11 @@ private struct Inspector: View {
                     ForEach(BackgroundSource.allCases) { Text($0.rawValue.capitalized).tag($0) }
                 }
                 if layer.source == .color {
-                    TextField("Color (#RRGGBB)", text: Binding(get: { layer.color ?? "#000000" }, set: { layer.color = $0 }))
+                    ColorPicker("Color", selection: Binding(
+                        get: { Color(hexString: layer.color ?? "#0B0B0F") },
+                        set: { layer.color = $0.hexStringRGBA() }), supportsOpacity: true)
+                    TextField("#RRGGBB or #RRGGBBAA", text: Binding(
+                        get: { layer.color ?? "#0B0B0F" }, set: { layer.color = $0 }))
                         .textFieldStyle(.roundedBorder)
                 }
             case .screen, .camera:
