@@ -1,0 +1,8 @@
+# Pins the Rust toolchain for reproducible builds and documents the intended
+# target. Note: a Homebrew `cargo` may shadow the rustup shim on PATH; this file
+# is only honored by rustup-managed cargo. The build does not depend on rustup —
+# the uniffi-bindgen binary is embedded in the crate (see core/crates/core), so
+# there is never a version skew between the bindgen and the uniffi dependency.
+[toolchain]
+channel = "stable"
+targets = ["aarch64-apple-darwin"]
