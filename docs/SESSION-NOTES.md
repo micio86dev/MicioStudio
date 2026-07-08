@@ -1,43 +1,45 @@
 # MicioStudio — build status & handoff
 
-Branches: `feat/phase-1-capture` → `feat/phase-2-library` (current has everything).
+Branch: `feat/phase-2-library` (all work here). **No git remote configured → I could not
+`git push`. Add a remote (`git remote add origin <url>` then `git push -u origin`) to push.**
 
-## Built & how verified
-- **Core (Rust, 31 `cargo test` green — fully verified):**
-  - `event_log` (InputEvent/JSONL), `template` (model + validation, `deviceId` per layer),
-    `library` (SQLite via rusqlite: template CRUD), `zoom` (Phase 4 auto-zoom engine).
-- **Compositor (Phase 3) — renderer verified headlessly (rendered a real recording → correct
-  composite: blurred bg, rounded+shadow floating screen, camera overlay):**
-  - `TemplateRenderer` (Core Image), `CompositePreview` (editor live preview),
-    `TemplateVideoExporter` (custom `AVVideoCompositing` → composed.mov). Metal-backed.
-- **App UI (compiles clean; NOT runtime-verified by me — needs your testing):**
-  - Main-window **studio layout**: large editable canvas — drag/resize elements, select one to
-    change its source (webcam/screen/image) + style inline, during recording. No global Sources
-    panel. Audio (mic + meters) stays global.
-  - Template editor sheet: canvas (flicker-free, aspect-locked resize, ⌥=crop), inspector
-    (per-layer source, color picker+alpha, cornerRadius/opacity/mirror), JSON export/import.
-  - Capture: multi-camera (camera.mov, camera-1.mov… + sources.json), mic device picker, timer,
-    mic-noise fix, stable code-signing (grants persist), app icon.
-  - In-app export after Stop: real composite (composed.mov) if a template is active, else the
-    ffmpeg side-by-side preview; progress bar + auto-open.
+## Verified automatically
+- **Rust core: 34 `cargo test` green** — event log, template model (+scenes, migration),
+  SQLite library, auto-zoom engine. 0 warnings.
+- **Compositor renderer: validated headlessly** — rendered real + placeholder frames;
+  per-scene render + fade/swipe transition blends produce correct composites.
+- **App: builds clean (Debug + Release), 0 warnings.**
 
-## ⚠️ NEEDS YOUR TESTING (built ahead of verification)
-1. Relaunch the fresh build. If the Dock icon looks stale: `killall Dock`.
-2. Pick a template → the big editable canvas appears. Drag/resize elements; select one → change
-   its webcam/screen/image + style. Confirm it feels right.
-3. Record ~10s with a template selected → confirm `composed.mov` is the real composite (this is
-   the one thing I could NOT verify headlessly — AVAssetExportSession needs the app run loop).
-4. Confirm mic audio is clean; confirm the editor "Preview" toggle renders.
+## Features built (need your runtime testing)
+1. **Studio main window** — large editable preview; drag/resize elements; select one to
+   change its source (webcam/screen/image) inline, during recording. No global Sources panel.
+2. **Scenes** — a template holds N scenes (SceneBar: select/add/rename/delete). Switch live
+   via chips or **number keys 1–9**; switches are recorded and re-applied in the export with
+   a **transition** (cut / fade / slide / swipe — picker next to the SceneBar). One mandatory
+   background per scene.
+3. **Webcam virtual background** — per camera layer: blur (light/medium/strong) or a cover
+   image, via Vision person segmentation (Inspector → Background).
+4. **Soundboard** — background music + one-shot SFX; import/persist in App Support/MicioStudio/
+   Audio; transport + loop modes (stop-at-end / repeat-one / repeat-all / auto-next) + effects
+   grid. Plays through system output → captured into the recording automatically.
+5. **Window capture** — Capture picker: full display or a single app window (Chrome etc.);
+   the window's audio is captured via the system-audio track.
+6. Editor polish: flicker-free drag, aspect-locked resize (⌥ = crop), color picker + alpha.
+7. **Real composite export** (`composed.mov`) via AVVideoCompositing when a template is active.
 
-## Remaining backlog (my recommended order; all requested)
-1. **Scenes**: template contains N scenes (one background each, mandatory); switch via buttons +
-   shortcuts with transitions (fade/slide/swipe). Big model change (Rust+Swift) — do the model in
-   TDD first.
-2. **Webcam virtual background**: blur (3 levels / none) + cover image (Vision person segmentation).
-3. **Audio soundboard**: load/save music + SFX; playback controls (loop one/all, auto-next, stop
-   at end); recorded into the export as its own track.
-4. **Window + app-audio capture**: capture a specific Chrome/app window with its audio (SCK
-   per-window + per-app audio).
+## ⚠️ Could NOT verify (needs you at runtime — I can't drive the app or its webcam)
+- `composed.mov` actual output (AVAssetExportSession hangs headless — works in-app).
+- Virtual-background segmentation quality (needs a live webcam frame with a person).
+- Soundboard playback + capture-into-recording; scene switching feel; window capture.
 
-Recommendation: TEST items 1–4 above before I build more on top — several earlier "non funziona"
-reports were likely stale builds. Then I continue the backlog in the order above.
+## How to test (tomorrow)
+1. Install from the .dmg (drag to Applications). It's **self-signed** ("MicioDev Local
+   Signing") → first launch: **right-click the app → Open** to bypass Gatekeeper. Grant
+   Screen Recording + Accessibility, then relaunch.
+2. Pick a template → editable canvas. Add scenes; switch with 1–9; pick a transition.
+3. Add camera layers, set a virtual background; add music/SFX in the Soundboard.
+4. Record ~20s (switch scenes, play a sound) → confirm `composed.mov` looks right.
+
+## Remaining ideas (optional)
+- Per-scene audio triggers; transition duration control; window audio true per-app isolation;
+  export settings (codec/bitrate/fps) + render queue (SPEC Phase 5).
