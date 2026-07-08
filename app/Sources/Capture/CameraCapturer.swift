@@ -42,20 +42,15 @@ final class CameraCapturer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
             url: outputDir.appendingPathComponent("camera.mov"),
             fileType: .mov, mediaType: .video,
             outputSettings: SegmentWriter.hevcVideo(width: Int(dims.width), height: Int(dims.height)))
+        // Anchor via the empirical host mapping (aligns even if the capture clock differs).
+        writer.setHostOrigin(t0Host)
 
         super.init()
         // Delegate can only be set after super.init (needs self).
         output.setSampleBufferDelegate(self, queue: queue)
     }
 
-    func start() {
-        session.startRunning()
-        // AVCapture PTS are on the session's synchronization clock (may differ from the
-        // host clock). Anchor at t0 converted INTO that clock so this track aligns with
-        // the SCK streams (SPEC §5.2).
-        let syncClock = session.synchronizationClock ?? CMClockGetHostTimeClock()
-        writer.setSessionStart(CMSyncConvertTime(t0Host, from: CMClockGetHostTimeClock(), to: syncClock))
-    }
+    func start() { session.startRunning() }
 
     func stopCapture() { session.stopRunning() }
     func finishWriting() async { await writer.finish() }

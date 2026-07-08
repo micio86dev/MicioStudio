@@ -8,6 +8,7 @@ final class AudioCapturer: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
     private let queue = DispatchQueue(label: "dev.miciodev.mic.audio")
     private let writer: SegmentWriter
     private let t0Host: CMTime
+    private let debugURL: URL
     private var sessionStartSet = false
 
     /// Called on the audio queue with a 0..1 level. Wire to a main-actor UI update.
@@ -15,6 +16,7 @@ final class AudioCapturer: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
 
     init(clock: RecordingClock, device: AVCaptureDevice, outputDir: URL) throws {
         t0Host = clock.t0Host
+        debugURL = outputDir.appendingPathComponent("sync-debug.txt")
         let input = try AVCaptureDeviceInput(device: device)
 
         session.beginConfiguration()
@@ -34,6 +36,8 @@ final class AudioCapturer: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
             url: outputDir.appendingPathComponent("mic.caf"),
             fileType: .caf, mediaType: .audio,
             outputSettings: SegmentWriter.pcmAudio48k(channels: 1))
+        // The mic clock is the audio device clock; anchor via the empirical host mapping.
+        writer.setHostOrigin(clock.t0Host)
 
         super.init()
         output.setSampleBufferDelegate(self, queue: queue)
@@ -46,14 +50,10 @@ final class AudioCapturer: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         if !sessionStartSet {
             sessionStartSet = true
-            // Anchor at the first sample, when synchronizationClock is reliably valid
-            // (it can be nil right after startRunning). Convert t0 into this session's
-            // clock so mic.caf aligns with the host-clock streams (SPEC §5.2).
-            let host = CMClockGetHostTimeClock()
-            let syncClock = session.synchronizationClock ?? host
-            writer.setSessionStart(CMSyncConvertTime(t0Host, from: host, to: syncClock))
             let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
-            NSLog("[mic-sync] syncClock=\(session.synchronizationClock == nil ? "nil" : "set") firstPTS=\(pts) hostNow=\(CMClockGetTime(host).seconds) t0Host=\(t0Host.seconds)")
+            let hostNow = CMClockGetTime(CMClockGetHostTimeClock()).seconds
+            let line = "mic firstPTS=\(pts) hostNow=\(hostNow) t0Host=\(t0Host.seconds) syncClock=\(session.synchronizationClock == nil ? "nil" : "set")\n"
+            try? line.data(using: .utf8)?.write(to: debugURL)
         }
         onLevel?(AudioLevel.rms(from: sampleBuffer))
         writer.append(sampleBuffer)
