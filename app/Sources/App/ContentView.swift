@@ -1,42 +1,43 @@
 import SwiftUI
-// The UniFFI-generated MicioCore.swift is compiled into this same app target, so
-// its types (InputEvent, appendEventLine, …) are available without an import.
+import AppKit
 
 struct ContentView: View {
-    @State private var coreCheck = "…"
+    @StateObject private var recorder = RecordingCoordinator()
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 20) {
             Text(Config.productName)
                 .font(.largeTitle.bold())
-            Text("Phase 1 — capture scaffold")
+            Text("Phase 1 — native-Retina capture")
                 .foregroundStyle(.secondary)
 
-            GroupBox("Rust core link check") {
-                Text(coreCheck)
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 4)
+            Button(action: recorder.toggle) {
+                Label(recorder.isRecording ? "Stop" : "Record",
+                      systemImage: recorder.isRecording ? "stop.circle.fill" : "record.circle")
+                    .font(.title2)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(recorder.isRecording ? .red : .accentColor)
+            .disabled(recorder.isBusy)
+
+            Text(recorder.status.isEmpty ? "Idle" : recorder.status)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity)
+
+            if let dir = recorder.lastOutputDir {
+                Button("Reveal last recording") {
+                    NSWorkspace.shared.activateFileViewerSelecting([dir])
+                }
+                .buttonStyle(.link)
             }
         }
-        .padding(24)
-        .frame(minWidth: 440, minHeight: 260)
-        .task { coreCheck = Self.verifyCoreRoundTrip() }
-    }
-
-    /// Proves the UniFFI binding links and runs: build an event in Swift, have the
-    /// Rust core serialize it, parse it back, and confirm the round-trip.
-    private static func verifyCoreRoundTrip() -> String {
-        let event = InputEvent(tMs: 1234, x: 0.51, y: 0.42, kind: .click)
-        let line = appendEventLine(event: event)
-        do {
-            let parsed = try parseEventsJsonl(text: line)
-            let ok = parsed.first == event
-            return "\(ok ? "✅" : "❌") core round-trip\n\(line)"
-        } catch {
-            return "❌ core error: \(error)"
-        }
+        .padding(28)
+        .frame(minWidth: 460, minHeight: 320)
     }
 }
 
