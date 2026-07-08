@@ -50,6 +50,17 @@ final class TemplateStore: ObservableObject {
         (try? TemplateDoc.parse(row.definition)) ?? .default
     }
 
+    /// Distinct camera device IDs referenced by a template's camera layers (for
+    /// multi-camera capture). Empty if the template has none / uses the default.
+    func cameraDeviceIDs(templateID: String) -> [String] {
+        guard let row = templates.first(where: { $0.id == templateID }) else { return [] }
+        var ids: [String] = []
+        for layer in doc(for: row).layers where layer.kind == .camera {
+            if let d = layer.deviceId, !d.isEmpty, !ids.contains(d) { ids.append(d) }
+        }
+        return ids
+    }
+
     private func seedBuiltins(into lib: Library) throws {
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         // normalize = parse + validate + pretty-print in the core; throws if invalid.

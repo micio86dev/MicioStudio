@@ -40,8 +40,12 @@ final class RecordingCoordinator: ObservableObject {
 
     private let exporter = CombinedExporter()
 
+    /// Distinct camera device IDs to capture this session (from the active template's
+    /// camera layers). Empty → just the selected webcam. Enables multi-camera capture.
+    var activeCameraDeviceIDs: [String] = []
+
     private var screen: ScreenCapturer?
-    private var camera: CameraCapturer?
+    private var cameras: [CameraCapturer] = []
     private var mic: AudioCapturer?
     private var events: EventTap?
     private var currentDir: URL?
@@ -86,7 +90,20 @@ final class RecordingCoordinator: ObservableObject {
             // capturers, so every writer anchors at the same real instant.
             let clock = RecordingClock()
             let screen = try ScreenCapturer(display: display, clock: clock, outputDir: dir)
-            let camera = selectedCameraDevice().flatMap { try? CameraCapturer(clock: clock, device: $0, outputDir: dir) }
+
+            // One CameraCapturer per distinct camera device (multi-camera capture).
+            var deviceIDs = activeCameraDeviceIDs.filter { AVCaptureDevice(uniqueID: $0) != nil }
+            if deviceIDs.isEmpty, let sel = selectedCameraDeviceID { deviceIDs = [sel] }
+            var cameras: [CameraCapturer] = []
+            for (i, id) in deviceIDs.enumerated() {
+                guard let device = AVCaptureDevice(uniqueID: id) else { continue }
+                let filename = i == 0 ? "camera.mov" : "camera-\(i).mov"
+                if let cap = try? CameraCapturer(clock: clock, device: device, outputDir: dir, filename: filename) {
+                    cameras.append(cap)
+                }
+            }
+            writeSourcesManifest(dir: dir, cameraIDs: deviceIDs)
+
             let mic = selectedMicDevice().flatMap { try? AudioCapturer(clock: clock, device: $0, outputDir: dir) }
             let events = EventTap(clock: clock, displayID: screen.displayID, outputDir: dir)
 
@@ -95,16 +112,16 @@ final class RecordingCoordinator: ObservableObject {
             mic?.onLevel = { [micLevelHolder] in micLevelHolder.set($0) }
 
             try await screen.start()
-            camera?.start()
+            cameras.forEach { $0.start() }
             mic?.start()
             let tapOK = events?.start() ?? false
 
             self.screen = screen
-            self.camera = camera
+            self.cameras = cameras
             self.mic = mic
             self.events = events
             state = .recording
-            status = summary(camera: camera != nil, mic: mic != nil, tapOK: tapOK)
+            status = summary(cameras: cameras.count, mic: mic != nil, tapOK: tapOK)
             startTicker()
         } catch {
             NSLog("[RecordingCoordinator] start failed: \(error)")
@@ -123,15 +140,15 @@ final class RecordingCoordinator: ObservableObject {
         // Stop ALL capture delivery together BEFORE finalizing any writer. Stopping
         // sequentially (await each stop+flush) let the mic keep recording during the
         // others' finalization → seconds of extra audio and duration drift.
-        camera?.stopCapture()
+        cameras.forEach { $0.stopCapture() }
         mic?.stopCapture()
         await screen?.stopCapture()
         await screen?.finishWriting()
-        await camera?.finishWriting()
+        for cam in cameras { await cam.finishWriting() }
         await mic?.finishWriting()
 
         let dir = currentDir
-        screen = nil; camera = nil; mic = nil; events = nil
+        screen = nil; cameras = []; mic = nil; events = nil
         lastOutputDir = dir
         combinedURL = nil
         state = .idle
@@ -230,12 +247,23 @@ final class RecordingCoordinator: ObservableObject {
         return dir
     }
 
-    private func summary(camera: Bool, mic: Bool, tapOK: Bool) -> String {
+    private func summary(cameras: Int, mic: Bool, tapOK: Bool) -> String {
         var parts = ["screen", "system-audio"]
-        if camera { parts.append("camera") }
+        if cameras == 1 { parts.append("camera") } else if cameras > 1 { parts.append("\(cameras) cameras") }
         if mic { parts.append("mic") }
         parts.append(tapOK ? "events" : "events(grant Accessibility + relaunch)")
         return "Recording: " + parts.joined(separator: " + ")
+    }
+
+    /// Records which camera device maps to which file, for the compositor (Phase 3).
+    private func writeSourcesManifest(dir: URL, cameraIDs: [String]) {
+        let cams = cameraIDs.enumerated().map { i, id -> [String: String] in
+            ["deviceId": id, "file": i == 0 ? "camera.mov" : "camera-\(i).mov"]
+        }
+        let manifest: [String: Any] = ["cameras": cams, "screen": "screen.mov"]
+        if let data = try? JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted]) {
+            try? data.write(to: dir.appendingPathComponent("sources.json"))
+        }
     }
 
     private static func err(_ message: String) -> NSError {

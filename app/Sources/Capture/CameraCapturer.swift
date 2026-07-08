@@ -10,7 +10,7 @@ final class CameraCapturer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     private let writer: SegmentWriter
     private let t0Host: CMTime
 
-    init(clock: RecordingClock, device: AVCaptureDevice, outputDir: URL) throws {
+    init(clock: RecordingClock, device: AVCaptureDevice, outputDir: URL, filename: String = "camera.mov") throws {
         t0Host = clock.t0Host
         let input = try AVCaptureDeviceInput(device: device)
 
@@ -35,7 +35,7 @@ final class CameraCapturer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         // activeFormat now reflects the preset → use its native dimensions.
         let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
         writer = try SegmentWriter(
-            url: outputDir.appendingPathComponent("camera.mov"),
+            url: outputDir.appendingPathComponent(filename),
             fileType: .mov, mediaType: .video,
             outputSettings: SegmentWriter.hevcVideo(width: Int(dims.width), height: Int(dims.height)))
         // Anchor via the empirical host mapping (aligns even if the capture clock differs).

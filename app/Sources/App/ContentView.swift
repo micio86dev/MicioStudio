@@ -5,6 +5,7 @@ struct ContentView: View {
     @StateObject private var recorder = RecordingCoordinator()
     @StateObject private var perms = PermissionManager()
     @StateObject private var templates = TemplateStore()
+    @State private var activeTemplateID: String?
 
     var body: some View {
         VStack(spacing: 18) {
@@ -28,6 +29,18 @@ struct ContentView: View {
                 store: templates,
                 cameras: recorder.cameraDevices.map { SourceOption(id: $0.id, label: $0.label) },
                 screens: recorder.displays.map { SourceOption(id: String($0.id), label: $0.label) })
+
+            if !templates.templates.isEmpty {
+                Picker("Record with", selection: $activeTemplateID) {
+                    Text("None (raw streams)").tag(String?.none)
+                    ForEach(templates.templates, id: \.id) { t in Text(t.name).tag(String?.some(t.id)) }
+                }
+                .frame(maxWidth: 360)
+                .disabled(recorder.isRecording || recorder.isBusy)
+                .onChange(of: activeTemplateID) { _, id in
+                    recorder.activeCameraDeviceIDs = id.map { templates.cameraDeviceIDs(templateID: $0) } ?? []
+                }
+            }
 
             if recorder.isRecording || recorder.elapsed > 0 {
                 HStack(spacing: 8) {
