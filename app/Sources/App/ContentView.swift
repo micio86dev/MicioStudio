@@ -87,6 +87,16 @@ struct ContentView: View {
                     .onChange(of: activeTemplateID) { _, _ in loadLive() }
                 }
 
+                if !recorder.windows.isEmpty {
+                    Picker("Capture", selection: $recorder.selectedWindowID) {
+                        Text("Full display").tag(CGWindowID?.none)
+                        ForEach(recorder.windows) { w in Text(w.label).tag(CGWindowID?.some(w.id)) }
+                    }
+                    .frame(maxWidth: 420)
+                    .disabled(recorder.isRecording || recorder.isBusy)
+                    .help("Capture the whole screen or a single app window (its audio is captured too)")
+                }
+
                 // Studio layout: large editable preview. Drag/resize elements; select one
                 // to change its source (webcam/screen/image) — works during recording too.
                 if liveDoc != nil {

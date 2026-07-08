@@ -17,6 +17,11 @@ final class RecordingCoordinator: ObservableObject {
         let label: String
     }
 
+    struct WindowOption: Identifiable, Hashable {
+        let id: CGWindowID
+        let label: String
+    }
+
     struct AudioDeviceOption: Identifiable, Hashable {
         let id: String   // AVCaptureDevice.uniqueID
         let label: String
@@ -27,6 +32,8 @@ final class RecordingCoordinator: ObservableObject {
     @Published private(set) var lastOutputDir: URL?
     @Published private(set) var displays: [DisplayOption] = []
     @Published var selectedDisplayID: CGDirectDisplayID?
+    @Published private(set) var windows: [WindowOption] = []
+    @Published var selectedWindowID: CGWindowID?   // nil = capture the whole display
     @Published private(set) var audioDevices: [AudioDeviceOption] = []
     @Published var selectedAudioDeviceID: String?
     @Published private(set) var cameraDevices: [AudioDeviceOption] = []
@@ -105,7 +112,12 @@ final class RecordingCoordinator: ObservableObject {
             // Fix t0 (the single shared origin, SPEC §5.2) right before building the
             // capturers, so every writer anchors at the same real instant.
             let clock = RecordingClock()
-            let screen = try ScreenCapturer(display: display, clock: clock, outputDir: dir)
+            let screen: ScreenCapturer
+            if let wid = selectedWindowID, let win = content.windows.first(where: { $0.windowID == wid }) {
+                screen = try ScreenCapturer(window: win, clock: clock, outputDir: dir)
+            } else {
+                screen = try ScreenCapturer(display: display, clock: clock, outputDir: dir)
+            }
 
             // One CameraCapturer per distinct camera device (multi-camera capture).
             var deviceIDs = activeCameraDeviceIDs.filter { AVCaptureDevice(uniqueID: $0) != nil }
@@ -213,6 +225,14 @@ final class RecordingCoordinator: ObservableObject {
         if selectedDisplayID == nil || !displays.contains(where: { $0.id == selectedDisplayID }) {
             selectedDisplayID = displays.first(where: { $0.id == main })?.id ?? displays.first?.id
         }
+        // On-screen, titled, reasonably sized app windows — for window capture.
+        windows = content.windows
+            .filter { $0.isOnScreen && ($0.title?.isEmpty == false) && $0.frame.width > 200 && $0.frame.height > 150 }
+            .map { w in
+                let app = w.owningApplication?.applicationName ?? "App"
+                return WindowOption(id: w.windowID, label: "\(app) — \(w.title ?? "")")
+            }
+        if let wid = selectedWindowID, !windows.contains(where: { $0.id == wid }) { selectedWindowID = nil }
     }
 
     /// Populate the microphone picker with the available audio input devices.

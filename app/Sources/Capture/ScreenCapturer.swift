@@ -21,12 +21,32 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
     /// Called on the audio queue with a 0..1 system-audio level for the UI meter.
     var onSystemLevel: (@Sendable (Float) -> Void)?
 
-    init(display: SCDisplay, clock: RecordingClock, outputDir: URL) throws {
-        displayID = display.displayID
-        // True native Retina pixels (SCDisplay.width/height are in points).
+    /// Capture a whole display at native pixels.
+    convenience init(display: SCDisplay, clock: RecordingClock, outputDir: URL) throws {
         let mode = CGDisplayCopyDisplayMode(display.displayID)
-        pixelWidth = mode?.pixelWidth ?? display.width
-        pixelHeight = mode?.pixelHeight ?? display.height
+        let w = mode?.pixelWidth ?? display.width
+        let h = mode?.pixelHeight ?? display.height
+        try self.init(filter: SCContentFilter(display: display, excludingWindows: []),
+                      width: w, height: h, displayID: display.displayID, clock: clock, outputDir: outputDir)
+    }
+
+    /// Capture a single application window (e.g. a Chrome tab). Its audio is still picked
+    /// up via the system-audio track.
+    convenience init(window: SCWindow, clock: RecordingClock, outputDir: URL) throws {
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+        let scale = CGFloat(filter.pointPixelScale)
+        let w = Int((filter.contentRect.width * scale).rounded())
+        let h = Int((filter.contentRect.height * scale).rounded())
+        try self.init(filter: filter, width: max(w, 2), height: max(h, 2),
+                      displayID: CGMainDisplayID(), clock: clock, outputDir: outputDir)
+    }
+
+    private init(filter: SCContentFilter, width: Int, height: Int, displayID: CGDirectDisplayID,
+                 clock: RecordingClock, outputDir: URL) throws {
+        self.displayID = displayID
+        // HEVC/'420v' needs even dimensions.
+        pixelWidth = width - (width % 2)
+        pixelHeight = height - (height % 2)
 
         videoWriter = try SegmentWriter(
             url: outputDir.appendingPathComponent("screen.mov"),
@@ -55,7 +75,6 @@ final class ScreenCapturer: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
         super.init()
 
         // The delegate is set only via the initializer, which needs self.
-        let filter = SCContentFilter(display: display, excludingWindows: [])
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: videoQueue)
         try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
