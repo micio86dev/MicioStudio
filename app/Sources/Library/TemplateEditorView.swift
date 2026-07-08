@@ -17,11 +17,14 @@ struct TemplateEditorView: View {
     let isBuiltin: Bool
     var cameras: [SourceOption] = []
     var screens: [SourceOption] = []
+    var previewSessionDir: URL?
 
     @State var name: String
     @State var doc: TemplateDoc
     @State private var selection: UUID?
     @State private var errorText: String?
+    @State private var showPreview = false
+    @StateObject private var sources = PreviewSources()
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -31,6 +34,9 @@ struct TemplateEditorView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 220)
                 Spacer()
+                Toggle(isOn: $showPreview) { Label("Preview", systemImage: "eye") }
+                    .toggleStyle(.button)
+                    .onChange(of: showPreview) { _, on in if on { sources.load(from: previewSessionDir) } }
                 Button("Import JSON…", action: importJSON)
                 Button("Export JSON…", action: exportJSON)
                 Button("Save", action: save)
@@ -42,9 +48,15 @@ struct TemplateEditorView: View {
             Divider()
 
             HStack(spacing: 0) {
-                CanvasView(doc: $doc, selection: $selection)
-                    .padding()
-                    .frame(minWidth: 460, minHeight: 300)
+                Group {
+                    if showPreview {
+                        CompositePreview(doc: doc, sources: sources)
+                    } else {
+                        CanvasView(doc: $doc, selection: $selection)
+                    }
+                }
+                .padding()
+                .frame(minWidth: 460, minHeight: 300)
                 Divider()
                 LayerPanel(doc: $doc, selection: $selection, cameras: cameras, screens: screens)
                     .frame(width: 250)

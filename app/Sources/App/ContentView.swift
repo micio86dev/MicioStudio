@@ -28,7 +28,8 @@ struct ContentView: View {
             TemplatesPanel(
                 store: templates,
                 cameras: recorder.cameraDevices.map { SourceOption(id: $0.id, label: $0.label) },
-                screens: recorder.displays.map { SourceOption(id: String($0.id), label: $0.label) })
+                screens: recorder.displays.map { SourceOption(id: String($0.id), label: $0.label) },
+                previewSessionDir: recorder.lastOutputDir)
 
             if !templates.templates.isEmpty {
                 Picker("Record with", selection: $activeTemplateID) {
@@ -224,6 +225,7 @@ private struct TemplatesPanel: View {
     @ObservedObject var store: TemplateStore
     var cameras: [SourceOption] = []
     var screens: [SourceOption] = []
+    var previewSessionDir: URL?
     @State private var editing: EditTarget?
 
     struct EditTarget: Identifiable {
@@ -270,7 +272,7 @@ private struct TemplatesPanel: View {
         }
         .sheet(item: $editing) { target in
             TemplateEditorView(store: store, templateID: target.id, isBuiltin: target.isBuiltin,
-                               cameras: cameras, screens: screens,
+                               cameras: cameras, screens: screens, previewSessionDir: previewSessionDir,
                                name: target.name, doc: target.doc)
         }
     }
