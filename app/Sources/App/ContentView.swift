@@ -24,7 +24,10 @@ struct ContentView: View {
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(.secondary.opacity(0.3)))
             }
 
-            TemplatesPanel(store: templates)
+            TemplatesPanel(
+                store: templates,
+                cameras: recorder.cameraDevices.map { SourceOption(id: $0.id, label: $0.label) },
+                screens: recorder.displays.map { SourceOption(id: String($0.id), label: $0.label) })
 
             if recorder.isRecording || recorder.elapsed > 0 {
                 HStack(spacing: 8) {
@@ -206,6 +209,8 @@ private struct PermissionsPanel: View {
 /// Phase 2: templates persisted in the Rust core's SQLite library, with a visual editor.
 private struct TemplatesPanel: View {
     @ObservedObject var store: TemplateStore
+    var cameras: [SourceOption] = []
+    var screens: [SourceOption] = []
     @State private var editing: EditTarget?
 
     struct EditTarget: Identifiable {
@@ -252,6 +257,7 @@ private struct TemplatesPanel: View {
         }
         .sheet(item: $editing) { target in
             TemplateEditorView(store: store, templateID: target.id, isBuiltin: target.isBuiltin,
+                               cameras: cameras, screens: screens,
                                name: target.name, doc: target.doc)
         }
     }

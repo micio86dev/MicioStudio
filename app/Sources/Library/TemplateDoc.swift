@@ -61,6 +61,7 @@ struct Layer: Identifiable, Equatable {
     var mirror: Bool?       // camera
     var path: String?       // image / background image
     var opacity: Double?    // image
+    var deviceId: String?   // camera: which webcam; screen: which display
 }
 
 // MARK: - Tagged Codable (maps the flat model to the `"type"` / `"source"` JSON)
@@ -68,7 +69,7 @@ struct Layer: Identifiable, Equatable {
 extension Layer: Codable {
     private enum Keys: String, CodingKey {
         case type, source, blur, darken, color, fit
-        case rect, cornerRadius, shadow, mirror, path, opacity
+        case rect, cornerRadius, shadow, mirror, path, opacity, deviceId
     }
 
     init(from decoder: Decoder) throws {
@@ -85,6 +86,7 @@ extension Layer: Codable {
         mirror = try c.decodeIfPresent(Bool.self, forKey: .mirror)
         path = try c.decodeIfPresent(String.self, forKey: .path)
         opacity = try c.decodeIfPresent(Double.self, forKey: .opacity)
+        deviceId = try c.decodeIfPresent(String.self, forKey: .deviceId)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -102,11 +104,13 @@ extension Layer: Codable {
             try c.encodeIfPresent(rect, forKey: .rect)
             try c.encodeIfPresent(cornerRadius, forKey: .cornerRadius)
             try c.encodeIfPresent(shadow, forKey: .shadow)
+            try c.encodeIfPresent(deviceId, forKey: .deviceId)
         case .camera:
             try c.encodeIfPresent(rect, forKey: .rect)
             try c.encodeIfPresent(cornerRadius, forKey: .cornerRadius)
             try c.encodeIfPresent(mirror, forKey: .mirror)
             try c.encodeIfPresent(shadow, forKey: .shadow)
+            try c.encodeIfPresent(deviceId, forKey: .deviceId)
         case .image:
             try c.encodeIfPresent(path, forKey: .path)
             try c.encodeIfPresent(rect, forKey: .rect)

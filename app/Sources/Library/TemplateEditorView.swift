@@ -5,10 +5,18 @@ import UniformTypeIdentifiers
 /// Phase 2 template editor: drag layers on a normalized 0..1 canvas, tweak style, and
 /// save. Validation is delegated to the Rust core (via TemplateStore.save →
 /// normalizeTemplateJson). Supports `.json` export / import (the Phase 2 gate).
+/// A selectable capture source (camera or display) for per-layer binding.
+struct SourceOption: Identifiable, Hashable {
+    let id: String
+    let label: String
+}
+
 struct TemplateEditorView: View {
     @ObservedObject var store: TemplateStore
     let templateID: String
     let isBuiltin: Bool
+    var cameras: [SourceOption] = []
+    var screens: [SourceOption] = []
 
     @State var name: String
     @State var doc: TemplateDoc
@@ -38,7 +46,7 @@ struct TemplateEditorView: View {
                     .padding()
                     .frame(minWidth: 460, minHeight: 300)
                 Divider()
-                LayerPanel(doc: $doc, selection: $selection)
+                LayerPanel(doc: $doc, selection: $selection, cameras: cameras, screens: screens)
                     .frame(width: 250)
             }
 
@@ -203,6 +211,8 @@ private struct DraggableLayer: View {
 private struct LayerPanel: View {
     @Binding var doc: TemplateDoc
     @Binding var selection: UUID?
+    var cameras: [SourceOption] = []
+    var screens: [SourceOption] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -238,7 +248,7 @@ private struct LayerPanel: View {
 
             Divider()
             if let idx = doc.layers.firstIndex(where: { $0.id == selection }) {
-                Inspector(layer: $doc.layers[idx]).padding(8)
+                Inspector(layer: $doc.layers[idx], cameras: cameras, screens: screens).padding(8)
             } else {
                 Text("Select a layer").font(.caption).foregroundStyle(.secondary).padding(8)
             }
@@ -269,6 +279,8 @@ private struct LayerPanel: View {
 
 private struct Inspector: View {
     @Binding var layer: Layer
+    var cameras: [SourceOption] = []
+    var screens: [SourceOption] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -283,6 +295,8 @@ private struct Inspector: View {
                         .textFieldStyle(.roundedBorder)
                 }
             case .screen, .camera:
+                devicePicker(layer.kind == .camera ? "Webcam" : "Monitor",
+                             options: layer.kind == .camera ? cameras : screens)
                 slider("Corner radius", Binding(get: { layer.cornerRadius ?? 0 }, set: { layer.cornerRadius = $0 }), 0...64)
                 if layer.kind == .camera {
                     Toggle("Mirror", isOn: Binding(get: { layer.mirror ?? false }, set: { layer.mirror = $0 }))
@@ -305,5 +319,15 @@ private struct Inspector: View {
             Text("\(label): \(Int(value.wrappedValue))").font(.caption)
             Slider(value: value, in: range)
         }
+    }
+
+    /// Per-layer source picker: bind this layer to a specific camera / display.
+    @ViewBuilder
+    private func devicePicker(_ label: String, options: [SourceOption]) -> some View {
+        Picker(label, selection: Binding(get: { layer.deviceId }, set: { layer.deviceId = $0 })) {
+            Text("Default").tag(String?.none)
+            ForEach(options) { opt in Text(opt.label).tag(String?.some(opt.id)) }
+        }
+        .font(.caption)
     }
 }

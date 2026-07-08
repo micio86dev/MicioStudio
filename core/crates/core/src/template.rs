@@ -90,6 +90,9 @@ pub struct ScreenLayer {
     pub corner_radius: f32,
     #[serde(default)]
     pub shadow: Option<Shadow>,
+    /// Which display feeds this layer (SCDisplay id as string). None = primary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -102,6 +105,9 @@ pub struct CameraLayer {
     pub mirror: bool,
     #[serde(default)]
     pub shadow: Option<Shadow>,
+    /// Which camera feeds this layer (AVCaptureDevice uniqueID). None = default camera.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -258,5 +264,16 @@ mod tests {
         let t = parse(VALID).unwrap();
         let reparsed = parse(&serialize(&t)).unwrap();
         assert_eq!(t, reparsed);
+    }
+
+    #[test]
+    fn per_layer_device_id_roundtrips_and_multiple_cameras_ok() {
+        let json = r#"{ "version":1, "canvas":{"width":1920,"height":1080}, "layers":[
+            {"type":"camera","rect":{"x":0.1,"y":0.1,"w":0.2,"h":0.2},"deviceId":"cam-A"},
+            {"type":"camera","rect":{"x":0.5,"y":0.5,"w":0.2,"h":0.2},"deviceId":"cam-B"} ] }"#;
+        let t = parse(json).unwrap();
+        let out = serialize(&t);
+        assert!(out.contains("cam-A") && out.contains("cam-B"), "deviceId must survive normalize");
+        assert!(validate(&t).is_ok(), "two cameras with different devices is valid");
     }
 }
