@@ -29,6 +29,8 @@ final class RecordingCoordinator: ObservableObject {
     @Published var selectedDisplayID: CGDirectDisplayID?
     @Published private(set) var audioDevices: [AudioDeviceOption] = []
     @Published var selectedAudioDeviceID: String?
+    @Published private(set) var cameraDevices: [AudioDeviceOption] = []
+    @Published var selectedCameraDeviceID: String?
     @Published private(set) var micLevel: Float = 0        // 0..1 for the meter
     @Published private(set) var systemLevel: Float = 0     // 0..1 for the meter
     @Published private(set) var elapsed: TimeInterval = 0
@@ -84,7 +86,7 @@ final class RecordingCoordinator: ObservableObject {
             // capturers, so every writer anchors at the same real instant.
             let clock = RecordingClock()
             let screen = try ScreenCapturer(display: display, clock: clock, outputDir: dir)
-            let camera = try? CameraCapturer(clock: clock, outputDir: dir)
+            let camera = selectedCameraDevice().flatMap { try? CameraCapturer(clock: clock, device: $0, outputDir: dir) }
             let mic = selectedMicDevice().flatMap { try? AudioCapturer(clock: clock, device: $0, outputDir: dir) }
             let events = EventTap(clock: clock, displayID: screen.displayID, outputDir: dir)
 
@@ -180,11 +182,27 @@ final class RecordingCoordinator: ObservableObject {
         }
     }
 
+    /// Populate the webcam picker with the available video capture devices.
+    func refreshCameraDevices() {
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInWideAngleCamera, .external, .continuityCamera, .deskViewCamera],
+            mediaType: .video, position: .unspecified)
+        cameraDevices = discovery.devices.map { AudioDeviceOption(id: $0.uniqueID, label: $0.localizedName) }
+        if selectedCameraDeviceID == nil || !cameraDevices.contains(where: { $0.id == selectedCameraDeviceID }) {
+            selectedCameraDeviceID = AVCaptureDevice.default(for: .video)?.uniqueID ?? cameraDevices.first?.id
+        }
+    }
+
     // MARK: - Helpers
 
     private func selectedMicDevice() -> AVCaptureDevice? {
         if let id = selectedAudioDeviceID, let device = AVCaptureDevice(uniqueID: id) { return device }
         return AVCaptureDevice.default(for: .audio)
+    }
+
+    private func selectedCameraDevice() -> AVCaptureDevice? {
+        if let id = selectedCameraDeviceID, let device = AVCaptureDevice(uniqueID: id) { return device }
+        return AVCaptureDevice.default(for: .video)
     }
 
     private func startTicker() {

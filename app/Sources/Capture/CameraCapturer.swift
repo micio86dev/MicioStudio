@@ -10,12 +10,8 @@ final class CameraCapturer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     private let writer: SegmentWriter
     private let t0Host: CMTime
 
-    init(clock: RecordingClock, outputDir: URL) throws {
+    init(clock: RecordingClock, device: AVCaptureDevice, outputDir: URL) throws {
         t0Host = clock.t0Host
-        guard let device = AVCaptureDevice.default(for: .video) else {
-            throw NSError(domain: "CameraCapturer", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "no webcam available"])
-        }
         let input = try AVCaptureDeviceInput(device: device)
 
         session.beginConfiguration()

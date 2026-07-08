@@ -77,6 +77,7 @@ struct ContentView: View {
             await perms.refresh()
             await recorder.refreshDisplays()
             recorder.refreshAudioDevices()
+            recorder.refreshCameraDevices()
             templates.load()
         }
     }
@@ -97,6 +98,12 @@ private struct SourcesPanel: View {
                 if recorder.displays.count > 1 {
                     Picker("Monitor", selection: $recorder.selectedDisplayID) {
                         ForEach(recorder.displays) { d in Text(d.label).tag(Optional(d.id)) }
+                    }
+                    .disabled(recorder.isRecording || recorder.isBusy)
+                }
+                if !recorder.cameraDevices.isEmpty {
+                    Picker("Webcam", selection: $recorder.selectedCameraDeviceID) {
+                        ForEach(recorder.cameraDevices) { d in Text(d.label).tag(Optional(d.id)) }
                     }
                     .disabled(recorder.isRecording || recorder.isBusy)
                 }
