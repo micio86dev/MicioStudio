@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import AVFoundation
 
 extension Array {
     subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
@@ -14,6 +15,8 @@ struct ContentView: View {
     @State private var liveDoc: TemplateDoc?
     @State private var liveSelection: UUID?
     @State private var transition = "fade"   // scene-switch transition: cut | fade | slide | swipe
+    @State private var showTimeline = false
+    @State private var timelineModel: TimelineModel?
 
     private var cameraOptions: [SourceOption] { recorder.cameraDevices.map { SourceOption(id: $0.id, label: $0.label) } }
     private var screenOptions: [SourceOption] { recorder.displays.map { SourceOption(id: String($0.id), label: $0.label) } }
@@ -172,8 +175,13 @@ struct ContentView: View {
                     .frame(maxWidth: 320)
                 }
                 if let combined = recorder.combinedURL {
-                    Button { NSWorkspace.shared.open(combined) } label: {
-                        Label("Open last export", systemImage: "play.rectangle.fill")
+                    HStack {
+                        Button { NSWorkspace.shared.open(combined) } label: {
+                            Label("Open last export", systemImage: "play.rectangle.fill")
+                        }
+                        Button { openTimeline(combined) } label: {
+                            Label("Edit (timeline)", systemImage: "scissors")
+                        }
                     }
                     .buttonStyle(.bordered)
                 }
@@ -194,6 +202,18 @@ struct ContentView: View {
             recorder.refreshAudioDevices()
             recorder.refreshCameraDevices()
             templates.load()
+        }
+        .sheet(isPresented: $showTimeline) {
+            if let model = timelineModel { TimelineEditorView(model: model) }
+        }
+    }
+
+    private func openTimeline(_ url: URL) {
+        Task {
+            let duration = (try? await AVURLAsset(url: url).load(.duration))?.seconds ?? 0
+            guard duration > 0.2 else { return }
+            timelineModel = TimelineModel(sourceURL: url, sourceDuration: duration)
+            showTimeline = true
         }
     }
 
