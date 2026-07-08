@@ -31,12 +31,18 @@ targets:
         ENABLE_USER_SCRIPT_SANDBOXING: NO
         CODE_SIGN_IDENTITY: "-"      # ad-hoc local signing (no dev team needed)
         CODE_SIGN_STYLE: Manual
-        # Link the Rust static lib.
-        LIBRARY_SEARCH_PATHS:
-          - $(inherited)
-          - $(SRCROOT)/../core/target/release
+        # Xcode 16+ splits Debug builds into a stub + debug.dylib linked with
+        # -undefined dynamic_lookup, which lets the Rust static lib's symbols stay
+        # UNDEFINED at link time (build passes) then crash at runtime. Disable it so
+        # Debug links libmicio_core.a into the executable like a normal build.
+        ENABLE_DEBUG_DYLIB: NO
+        # Link the Rust static lib. -force_load pulls ALL archive members regardless
+        # of link order — plain -lmicio_core leaves the FFI symbols undefined because
+        # the archive is scanned before the Swift objects reference them. Two array
+        # elements keep the space in the path within a single argv entry.
         OTHER_LDFLAGS:
-          - -lmicio_core
+          - -force_load
+          - $(SRCROOT)/../core/target/release/libmicio_core.a
         # Make the generated `import micio_coreFFI` resolvable by explicitly
         # loading the generated Clang modulemap (survives regeneration; no edits
         # to generated files).

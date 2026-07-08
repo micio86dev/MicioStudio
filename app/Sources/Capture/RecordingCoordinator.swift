@@ -84,9 +84,21 @@ final class RecordingCoordinator: ObservableObject {
         let dir = currentDir
         screen = nil; camera = nil; mic = nil; events = nil
         lastOutputDir = dir
-        // Checkpoint 3 wires SideBySideExporter here → combined.mov.
+
+        // Build the throwaway side-by-side gate artifact. Failure here does NOT fail
+        // the recording — the separate streams are the canonical output (SPEC §7).
+        if let dir {
+            status = "Building combined.mov…"
+            do {
+                _ = try await SideBySideExporter.export(sessionDir: dir)
+                status = "Saved to \(dir.path)"
+            } catch {
+                status = "Saved to \(dir.path) (combined.mov skipped: \(error.localizedDescription))"
+            }
+        } else {
+            status = "Saved."
+        }
         state = .idle
-        status = dir.map { "Saved to \($0.path)" } ?? "Saved."
     }
 
     // MARK: - Helpers
