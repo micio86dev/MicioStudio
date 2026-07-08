@@ -74,6 +74,7 @@ struct ContentView: View {
                 // Studio layout: large editable preview. Drag/resize elements; select one
                 // to change its source (webcam/screen/image) — works during recording too.
                 if liveDoc != nil {
+                    SceneBar(doc: liveBinding)
                     CanvasView(doc: liveBinding, selection: $liveSelection)
                         .frame(minHeight: 320, maxHeight: 460)
                         .background(Color.black)

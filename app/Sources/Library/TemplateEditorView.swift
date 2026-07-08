@@ -29,6 +29,59 @@ extension Color {
     }
 }
 
+/// Scene switcher: chips to select the active scene (+ add / rename / delete). Shared by
+/// the editor and the main window. Editing here mutates `doc.activeSceneIndex`/`scenes`.
+struct SceneBar: View {
+    @Binding var doc: TemplateDoc
+    @State private var renaming: Int?
+    @State private var renameText = ""
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(Array(doc.scenes.enumerated()), id: \.element.id) { index, scene in
+                        Button { doc.activeSceneIndex = index } label: {
+                            Text(scene.name).lineLimit(1)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(index == doc.activeSceneIndex ? .accentColor : .gray)
+                        .contextMenu {
+                            Button("Rename") { renaming = index; renameText = scene.name }
+                            if doc.scenes.count > 1 {
+                                Button("Delete", role: .destructive) { deleteScene(index) }
+                            }
+                        }
+                    }
+                }
+            }
+            Button { addScene() } label: { Image(systemName: "plus.rectangle.on.rectangle") }
+                .help("Add scene")
+        }
+        .alert("Rename scene", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Name", text: $renameText)
+            Button("Save") {
+                if let i = renaming, doc.scenes.indices.contains(i) { doc.scenes[i].name = renameText }
+                renaming = nil
+            }
+            Button("Cancel", role: .cancel) { renaming = nil }
+        }
+    }
+
+    private func addScene() {
+        let scene = SceneDoc(name: "Scene \(doc.scenes.count + 1)", canvas: doc.canvas,
+                             layers: [Layer(kind: .background, source: .color, color: "#0B0B0FFF")])
+        doc.scenes.append(scene)
+        doc.activeSceneIndex = doc.scenes.count - 1
+    }
+
+    private func deleteScene(_ index: Int) {
+        guard doc.scenes.count > 1, doc.scenes.indices.contains(index) else { return }
+        doc.scenes.remove(at: index)
+        doc.activeSceneIndex = min(doc.activeSceneIndex, doc.scenes.count - 1)
+    }
+}
+
 /// Phase 2 template editor: drag layers on a normalized 0..1 canvas, tweak style, and
 /// save. Validation is delegated to the Rust core (via TemplateStore.save →
 /// normalizeTemplateJson). Supports `.json` export / import (the Phase 2 gate).
