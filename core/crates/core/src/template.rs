@@ -102,6 +102,10 @@ pub struct ScreenLayer {
     /// Which display feeds this layer (SCDisplay id as string). None = primary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hidden: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -123,6 +127,10 @@ pub struct CameraLayer {
     /// Cover image path when bg_mode == image.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bg_image: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hidden: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -134,10 +142,18 @@ pub struct ImageLayer {
     pub opacity: f32,
     #[serde(default)]
     pub visible: Option<Visible>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hidden: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
 }
 
 fn one() -> f32 {
     1.0
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl Layer {
@@ -307,6 +323,16 @@ mod tests {
     fn empty_scenes_is_rejected() {
         let json = r#"{ "version": 1, "scenes": [] }"#;
         assert!(validate_template_json(json.to_string()).is_err(), "no scenes must fail");
+    }
+
+    #[test]
+    fn hidden_and_locked_survive_normalize() {
+        let json = r##"{ "version":1, "scenes":[ { "name":"S", "canvas":{"width":1920,"height":1080}, "layers":[
+            {"type":"background","source":"color","color":"#000000"},
+            {"type":"camera","rect":{"x":0.1,"y":0.1,"w":0.2,"h":0.2},"hidden":true,"locked":true} ] } ] }"##;
+        let out = normalize_template_json(json.to_string()).expect("valid");
+        assert!(out.contains("\"hidden\": true"), "hidden must survive normalize");
+        assert!(out.contains("\"locked\": true"), "locked must survive normalize");
     }
 
     #[test]

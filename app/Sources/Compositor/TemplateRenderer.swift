@@ -33,6 +33,7 @@ enum TemplateRenderer {
         var cameraIndex = 0
 
         for layer in template.layers {
+            if layer.hidden == true { continue }   // OBS-style visibility
             switch layer.kind {
             case .background:
                 result = background(layer, screen: screenCI, canvas: canvas).composited(over: result)

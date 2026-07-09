@@ -129,6 +129,8 @@ struct Layer: Identifiable, Equatable {
     var deviceId: String?   // camera: which webcam; screen: which display
     var bgMode: String?     // camera virtual background: none|blurLight|blurMedium|blurStrong|image
     var bgImage: String?    // camera: cover image path when bgMode == image
+    var locked: Bool?       // editor: can't move/resize
+    var hidden: Bool?       // not rendered (OBS-style visibility)
 }
 
 // MARK: - Tagged Codable (maps the flat model to the `"type"` / `"source"` JSON)
@@ -137,6 +139,7 @@ extension Layer: Codable {
     private enum Keys: String, CodingKey {
         case type, source, blur, darken, color, fit
         case rect, cornerRadius, shadow, mirror, path, opacity, deviceId, bgMode, bgImage
+        case locked, hidden
     }
 
     init(from decoder: Decoder) throws {
@@ -156,11 +159,15 @@ extension Layer: Codable {
         deviceId = try c.decodeIfPresent(String.self, forKey: .deviceId)
         bgMode = try c.decodeIfPresent(String.self, forKey: .bgMode)
         bgImage = try c.decodeIfPresent(String.self, forKey: .bgImage)
+        locked = try c.decodeIfPresent(Bool.self, forKey: .locked)
+        hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden)
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: Keys.self)
         try c.encode(kind, forKey: .type)
+        try c.encodeIfPresent(locked, forKey: .locked)
+        try c.encodeIfPresent(hidden, forKey: .hidden)
         switch kind {
         case .background:
             try c.encodeIfPresent(source, forKey: .source)

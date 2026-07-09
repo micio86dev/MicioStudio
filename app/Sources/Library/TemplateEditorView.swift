@@ -235,55 +235,68 @@ private struct DraggableLayer: View {
     let onSelect: () -> Void
     let onChange: (RectN) -> Void
 
-    // Transient gesture translations. Applied VISUALLY during the drag and committed to
-    // the document only on release — so `doc` isn't mutated every frame (that caused the
-    // whole editor to re-render and flicker).
-    @GestureState private var moveT: CGSize = .zero
-    @GestureState private var resizeT: CGSize = .zero
-
+    // Local live rect during a drag. Updating a LOCAL @State (not `doc`) means only this
+    // layer re-renders, not the whole editor. Kept until the committed rect propagates
+    // back through `layer` — which removes the one-frame snap-back @GestureState caused.
+    @State private var live: RectN?
     private let minSize = 0.05
 
+    private var committed: RectN { layer.rect ?? RectN(x: 0, y: 0, w: 0.1, h: 0.1) }
+    private var locked: Bool { layer.locked == true }
+    // Webcam fills its box (cover), so free-resize by default; Option frees the others.
+    private var freeResize: Bool { layer.kind == .camera || NSEvent.modifierFlags.contains(.option) }
+
     var body: some View {
-        let base = layer.rect ?? RectN(x: 0, y: 0, w: 0.1, h: 0.1)
-        let eff = effective(base)
-        let w = CGFloat(eff.w) * canvas.width
-        let h = CGFloat(eff.h) * canvas.height
+        let base = live ?? committed
+        let w = CGFloat(base.w) * canvas.width
+        let h = CGFloat(base.h) * canvas.height
         ZStack(alignment: .bottomTrailing) {
             RoundedRectangle(cornerRadius: 6)
-                .fill(color.opacity(0.28))
+                .fill(color.opacity(layer.hidden == true ? 0.1 : 0.28))
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(color, lineWidth: selected ? 2.5 : 1))
-                .overlay(Text(layer.kind.label).font(.caption2).foregroundStyle(.white))
+                .overlay(badge)
                 .contentShape(Rectangle())
-                .gesture(
-                    DragGesture()
-                        .updating($moveT) { v, s, _ in s = v.translation }
-                        .onEnded { v in onSelect(); onChange(moved(base, by: v.translation)) }
-                )
                 .onTapGesture { onSelect() }
-            if selected {
+                .gesture(moveGesture)
+            if selected && !locked {
                 Circle().fill(.white).overlay(Circle().stroke(color, lineWidth: 2))
                     .frame(width: 14, height: 14)
                     .offset(x: 7, y: 7)
-                    .gesture(
-                        DragGesture()
-                            .updating($resizeT) { v, s, _ in s = v.translation }
-                            .onEnded { v in onSelect(); onChange(resized(base, by: v.translation, free: freeResize)) }
-                    )
+                    .gesture(resizeGesture)
             }
         }
         .frame(width: max(w, 8), height: max(h, 8))
-        .position(x: CGFloat(eff.x) * canvas.width + w / 2, y: CGFloat(eff.y) * canvas.height + h / 2)
+        .position(x: CGFloat(base.x) * canvas.width + w / 2, y: CGFloat(base.y) * canvas.height + h / 2)
+        .opacity(layer.hidden == true ? 0.55 : 1)
+        .onChange(of: layer.rect) { _, r in if r == live { live = nil } }
     }
 
-    /// Hold Option while resizing to free-resize (crop, via the renderer's aspect-fill)
-    /// instead of keeping the source aspect ratio.
-    private var freeResize: Bool { NSEvent.modifierFlags.contains(.option) }
+    private var badge: some View {
+        HStack(spacing: 3) {
+            if locked { Image(systemName: "lock.fill") }
+            if layer.hidden == true { Image(systemName: "eye.slash.fill") }
+            Text(layer.kind.label)
+        }
+        .font(.caption2).foregroundStyle(.white)
+    }
 
-    /// Base rect with the live (uncommitted) move/resize translation applied. Only one
-    /// gesture is active at a time.
-    private func effective(_ base: RectN) -> RectN {
-        if resizeT != .zero { return resized(base, by: resizeT, free: freeResize) }
-        return moved(base, by: moveT)
+    private var moveGesture: some Gesture {
+        DragGesture()
+            .onChanged { v in guard !locked else { return }; live = moved(committed, by: v.translation) }
+            .onEnded { v in
+                guard !locked else { return }
+                let final = moved(committed, by: v.translation)
+                live = final; onSelect(); onChange(final)
+            }
+    }
+
+    private var resizeGesture: some Gesture {
+        DragGesture()
+            .onChanged { v in live = resized(committed, by: v.translation, free: freeResize) }
+            .onEnded { v in
+                let final = resized(committed, by: v.translation, free: freeResize)
+                live = final; onSelect(); onChange(final)
+            }
     }
 
     private func moved(_ base: RectN, by t: CGSize) -> RectN {
@@ -352,11 +365,17 @@ private struct LayerPanel: View {
 
             List(selection: $selection) {
                 ForEach(doc.layers) { layer in
-                    HStack {
+                    HStack(spacing: 6) {
                         Image(systemName: icon(layer.kind))
-                        Text(layer.kind.label)
+                        Text(layer.kind.label).lineLimit(1)
                         Spacer()
-                        if layer.kind != .background {   // background is mandatory, not removable
+                        if layer.kind != .background {   // background is mandatory + fixed
+                            Button { toggleHidden(layer.id) } label: {
+                                Image(systemName: layer.hidden == true ? "eye.slash" : "eye")
+                            }.buttonStyle(.borderless).help("Show / hide")
+                            Button { toggleLocked(layer.id) } label: {
+                                Image(systemName: layer.locked == true ? "lock.fill" : "lock.open")
+                            }.buttonStyle(.borderless).help("Lock / unlock")
                             Button(role: .destructive) {
                                 doc.layers.removeAll { $0.id == layer.id }
                             } label: { Image(systemName: "trash") }
@@ -365,6 +384,7 @@ private struct LayerPanel: View {
                     }
                     .tag(layer.id)
                 }
+                .onMove { doc.layers.move(fromOffsets: $0, toOffset: $1) }   // drag to reorder (z-index)
             }
             .frame(maxHeight: 180)
 
@@ -387,6 +407,18 @@ private struct LayerPanel: View {
         }
         doc.layers.append(layer)
         selection = layer.id
+    }
+
+    private func toggleHidden(_ id: UUID) {
+        if let i = doc.layers.firstIndex(where: { $0.id == id }) {
+            doc.layers[i].hidden = !(doc.layers[i].hidden ?? false)
+        }
+    }
+
+    private func toggleLocked(_ id: UUID) {
+        if let i = doc.layers.firstIndex(where: { $0.id == id }) {
+            doc.layers[i].locked = !(doc.layers[i].locked ?? false)
+        }
     }
 
     private func icon(_ k: LayerKind) -> String {
@@ -421,6 +453,8 @@ struct Inspector: View {
                     TextField("#RRGGBB or #RRGGBBAA", text: Binding(
                         get: { layer.color ?? "#0B0B0F" }, set: { layer.color = $0 }))
                         .textFieldStyle(.roundedBorder)
+                } else if layer.source == .image {
+                    imageField("Image", Binding(get: { layer.path ?? "" }, set: { layer.path = $0 }))
                 }
             case .screen, .camera:
                 devicePicker(layer.kind == .camera ? "Webcam" : "Monitor",
@@ -438,15 +472,12 @@ struct Inspector: View {
                     }
                     .font(.caption)
                     if layer.bgMode == "image" {
-                        TextField("Cover image path", text: Binding(
-                            get: { layer.bgImage ?? "" }, set: { layer.bgImage = $0 }))
-                            .textFieldStyle(.roundedBorder)
+                        imageField("Cover image", Binding(get: { layer.bgImage ?? "" }, set: { layer.bgImage = $0 }))
                     }
                 }
             case .image:
                 slider("Opacity", Binding(get: { layer.opacity ?? 1 }, set: { layer.opacity = $0 }), 0...1)
-                TextField("Path", text: Binding(get: { layer.path ?? "" }, set: { layer.path = $0 }))
-                    .textFieldStyle(.roundedBorder)
+                imageField("Image", Binding(get: { layer.path ?? "" }, set: { layer.path = $0 }))
             }
             if let r = layer.rect {
                 Text(String(format: "x %.2f  y %.2f  w %.2f  h %.2f", r.x, r.y, r.w, r.h))
@@ -460,6 +491,28 @@ struct Inspector: View {
         VStack(alignment: .leading, spacing: 2) {
             Text("\(label): \(Int(value.wrappedValue))").font(.caption)
             Slider(value: value, in: range)
+        }
+    }
+
+    /// Pick an image file via a panel (no manual paths). Shows the filename + a clear button.
+    @ViewBuilder
+    private func imageField(_ label: String, _ path: Binding<String>) -> some View {
+        HStack(spacing: 6) {
+            Text(label).font(.caption)
+            Text(path.wrappedValue.isEmpty ? "None" : (path.wrappedValue as NSString).lastPathComponent)
+                .font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            Spacer()
+            Button("Choose…") {
+                let panel = NSOpenPanel()
+                panel.canChooseFiles = true
+                panel.canChooseDirectories = false
+                panel.allowedContentTypes = [.image]
+                if panel.runModal() == .OK, let url = panel.url { path.wrappedValue = url.path }
+            }
+            if !path.wrappedValue.isEmpty {
+                Button { path.wrappedValue = "" } label: { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.borderless)
+            }
         }
     }
 
