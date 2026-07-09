@@ -109,13 +109,18 @@ enum TimelineExporter {
         let naturalSize = try await srcVideo.load(.naturalSize)
         let renderSize = CGSize(width: abs(naturalSize.width), height: abs(naturalSize.height))
 
+        guard renderSize.width > 0 && renderSize.height > 0 else { throw ExportError.noVideoTrack }
+
         let composition = AVMutableComposition()
         // Two alternating video + audio tracks so transition overlaps don't collide.
-        let vTracks = [composition.addMutableTrack(withMediaType: .video, preferredTrackID: 1)!,
-                       composition.addMutableTrack(withMediaType: .video, preferredTrackID: 2)!]
-        let aTracks = srcAudio == nil ? [] : [
-            composition.addMutableTrack(withMediaType: .audio, preferredTrackID: 3)!,
-            composition.addMutableTrack(withMediaType: .audio, preferredTrackID: 4)!]
+        guard let vt1 = composition.addMutableTrack(withMediaType: .video, preferredTrackID: 1),
+              let vt2 = composition.addMutableTrack(withMediaType: .video, preferredTrackID: 2) else {
+            throw ExportError.noVideoTrack
+        }
+        let vTracks = [vt1, vt2]
+        let at1 = srcAudio == nil ? nil : composition.addMutableTrack(withMediaType: .audio, preferredTrackID: 3)
+        let at2 = srcAudio == nil ? nil : composition.addMutableTrack(withMediaType: .audio, preferredTrackID: 4)
+        let aTracks: [AVMutableCompositionTrack] = [at1, at2].compactMap { $0 }
 
         let scale: CMTimeScale = 600
         var layout: [ClipLayout] = []

@@ -310,7 +310,7 @@ private struct DraggableLayer: View {
         ZStack(alignment: .bottomTrailing) {
             liveContent
                 .frame(width: max(w, 8), height: max(h, 8))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: CGFloat(layer.cornerRadius ?? 6)))
                 .allowsHitTesting(false)
             RoundedRectangle(cornerRadius: 6)
                 .fill(color.opacity(live ? 0.0 : (layer.hidden == true ? 0.1 : 0.28)))
@@ -334,17 +334,30 @@ private struct DraggableLayer: View {
 
     @ViewBuilder private var liveContent: some View {
         if live && layer.hidden != true {
+            let contain = layer.fit == "contain"
             switch layer.kind {
             case .camera:
                 WebcamPreview(deviceID: layer.deviceId ?? defaultCameraID, active: true)
+                    .scaleEffect(x: layer.mirror == true ? -1 : 1)
             case .screen:
                 if let img = screenImage {
-                    Image(nsImage: img).resizable().scaledToFill()
+                    if contain {
+                        Image(nsImage: img).resizable().scaledToFit()
+                    } else {
+                        Image(nsImage: img).resizable().scaledToFill()
+                    }
                 } else { Color.black }
             case .image:
                 if let p = layer.path, !p.isEmpty,
                    let img = NSImage(contentsOfFile: (p as NSString).expandingTildeInPath) {
-                    Image(nsImage: img).resizable().scaledToFill()
+                    Group {
+                        if contain {
+                            Image(nsImage: img).resizable().scaledToFit()
+                        } else {
+                            Image(nsImage: img).resizable().scaledToFill()
+                        }
+                    }
+                    .opacity(layer.opacity ?? 1)
                 } else { Color.gray.opacity(0.3) }
             case .background:
                 Color.clear

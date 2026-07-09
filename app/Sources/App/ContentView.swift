@@ -26,6 +26,8 @@ struct ContentView: View {
     @State private var saveTask: Task<Void, Never>?
     @State private var layerPanelHeight: CGFloat = 220
     @GestureState private var layerHeightDelta: CGFloat = 0
+    @State private var toast: String?
+    @State private var toastTask: Task<Void, Never>?
 
     private var cameraOptions: [SourceOption] { recorder.cameraDevices.map { SourceOption(id: $0.id, label: $0.label) } }
     private var screenOptions: [SourceOption] { recorder.displays.map { SourceOption(id: String($0.id), label: $0.label) } }
@@ -103,6 +105,7 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 1140, minHeight: 700)
+        .overlay(alignment: .bottom) { toastOverlay }
         .background(sceneShortcuts)
         .task {
             await perms.refresh()
@@ -113,7 +116,10 @@ struct ContentView: View {
             recordings.reload()
             updateSnapshot()
         }
-        .onChange(of: recorder.combinedURL) { _, _ in recordings.reload() }
+        .onChange(of: recorder.combinedURL) { _, url in
+            recordings.reload()
+            if url != nil { showToast("Export completed") }
+        }
         .onChange(of: previewLive) { _, _ in updateSnapshot() }
         .onChange(of: recorder.selectedDisplayID) { _, _ in updateSnapshot() }
         .onChange(of: recorder.selectedWindowID) { _, _ in updateSnapshot() }
@@ -267,6 +273,28 @@ struct ContentView: View {
                                previewSessionDir: recorder.lastOutputDir)
             }
             .padding(12)
+        }
+    }
+
+    @ViewBuilder private var toastOverlay: some View {
+        if let msg = toast {
+            Text(msg)
+                .font(.callout.weight(.medium))
+                .padding(.horizontal, 18).padding(.vertical, 10)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .shadow(radius: 6)
+                .padding(.bottom, 28)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    private func showToast(_ message: String) {
+        withAnimation(.spring(duration: 0.3)) { toast = message }
+        toastTask?.cancel()
+        toastTask = Task {
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.4)) { toast = nil }
         }
     }
 

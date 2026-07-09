@@ -206,7 +206,6 @@ final class RecordingCoordinator: ObservableObject {
             }
             combinedURL = url
             status = "Saved to \(dir.path)"
-            NSWorkspace.shared.open(url)   // auto-open the result
         } catch {
             status = "Saved to \(dir.path) (export failed: \(error))"
         }
