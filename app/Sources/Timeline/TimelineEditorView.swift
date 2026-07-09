@@ -32,6 +32,8 @@ struct TimelineEditorView: View {
     @State private var exportProgress = 0.0
     @State private var status = ""
     @State private var thumbnails: [UUID: NSImage] = [:]
+    /// Captures model.playhead at the moment a playhead drag starts (reset by @GestureState).
+    @GestureState private var playheadDragStart: Double? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -58,9 +60,9 @@ struct TimelineEditorView: View {
         .onAppear {
             timeObserver = player.addPeriodicTimeObserver(
                 forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main) { t in
-                    let seconds = t.seconds
+                    let s = t.seconds
                     Task { @MainActor in
-                        if isPlaying { model.playhead = min(seconds, model.totalDuration) }
+                        if isPlaying { model.playhead = min(s, model.totalDuration) }
                     }
                 }
         }
@@ -73,15 +75,11 @@ struct TimelineEditorView: View {
 
     private var transportBar: some View {
         HStack(spacing: 8) {
-            // Back to start
-            Button { seekAndPause(0) } label: { Image(systemName: "backward.end.fill") }
-                .buttonStyle(.borderless)
-                .help("Back to start")
+            Button { seekTo(0) } label: { Image(systemName: "backward.end.fill") }
+                .buttonStyle(.borderless).help("Back to start")
 
-            // Play / Pause  (Space)
             Button { togglePlay() } label: {
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                    .frame(width: 18)
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill").frame(width: 18)
             }
             .buttonStyle(.borderless)
             .keyboardShortcut(.space, modifiers: [])
@@ -89,7 +87,6 @@ struct TimelineEditorView: View {
 
             Divider().frame(height: 20)
 
-            // Cut at playhead  (C)
             Button { model.splitAtPlayhead() } label: {
                 Label("Cut", systemImage: "scissors")
             }
@@ -97,39 +94,40 @@ struct TimelineEditorView: View {
             .keyboardShortcut("c", modifiers: [])
             .help("Cut clip at playhead  ·  C")
 
-            // Delete selected clip
             Button(role: .destructive) {
                 if let s = model.selection { model.delete(s) }
             } label: {
-                Label("Remove", systemImage: "trash")
+                Label("Remove clip", systemImage: "trash")
             }
             .buttonStyle(.bordered)
             .disabled(model.selection == nil || model.clips.count <= 1)
-            .help("Remove selected clip")
+            .help("Remove selected clip  ·  ⌦")
 
-            Spacer()
-
-            // Time counter
-            Group {
-                Text(timeLabel(model.playhead))
-                    .font(.system(.body, design: .monospaced).weight(.semibold))
-                Text("/")
-                    .foregroundStyle(.secondary)
-                Text(timeLabel(model.totalDuration))
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(.secondary)
+            // Selection info
+            if let sel = model.selection,
+               let idx = model.clips.firstIndex(where: { $0.id == sel }) {
+                Text("Clip \(idx + 1) selected")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
             }
 
             Spacer()
 
-            // Zoom
+            Text(timeLabel(model.playhead))
+                .font(.system(.body, design: .monospaced).weight(.semibold))
+            Text("/").foregroundStyle(.secondary)
+            Text(timeLabel(model.totalDuration))
+                .font(.system(.body, design: .monospaced)).foregroundStyle(.secondary)
+
+            Spacer()
+
             Image(systemName: "minus.magnifyingglass").foregroundStyle(.secondary)
             Slider(value: $model.pixelsPerSecond, in: 20 ... 320).frame(width: 130)
             Image(systemName: "plus.magnifyingglass").foregroundStyle(.secondary)
         }
     }
 
-    // MARK: - Timeline
+    // MARK: - Timeline area
 
     private var timelineArea: some View {
         let pps = model.pixelsPerSecond
@@ -137,22 +135,19 @@ struct TimelineEditorView: View {
 
         return ScrollView(.horizontal, showsIndicators: true) {
             ZStack(alignment: .topLeading) {
-                // Seek target (whole background)
+
+                // ── Layer 0: seek background (lowest, catches all unhandled taps/drags) ──
                 Color.clear
                     .contentShape(Rectangle())
-                    .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .local)
-                        .onChanged { v in
-                            let t = max(0, min(model.totalDuration, (v.location.x - 16) / pps))
-                            model.playhead = t
-                            if isPlaying { player.pause(); isPlaying = false }
-                            Task { await seek(t) }
-                        })
+                    .gesture(seekGesture(pps: pps))
 
+                // ── Layer 1: ruler + clips ──
                 VStack(spacing: 0) {
                     timeRuler(pps: pps).frame(height: 22)
                     clipsRow(pps: pps).frame(height: 88)
                 }
 
+                // ── Layer 2: playhead (highest, intercepts events on its hit area) ──
                 playheadView(pps: pps)
             }
             .frame(width: totalW, height: 116)
@@ -161,7 +156,30 @@ struct TimelineEditorView: View {
         .background(Color(NSColor.controlBackgroundColor))
     }
 
-    // MARK: Ruler
+    // MARK: Seek gesture (background)
+    //
+    // Clips have NO tap/drag gestures of their own, so all touches fall through
+    // to this layer. That means clicking anywhere — even on a clip — moves the
+    // playhead to the EXACT click position and auto-selects the clip there.
+    private func seekGesture(pps: Double) -> some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .local)
+            .onChanged { v in
+                let t = max(0, min(model.totalDuration, (v.location.x - 16) / pps))
+                applySeek(t)
+            }
+    }
+
+    private func applySeek(_ t: Double) {
+        model.playhead = t
+        if isPlaying { player.pause(); isPlaying = false }
+        // Auto-select whichever clip contains this timeline position
+        if let (i, _) = model.clipIndex(atTimelineTime: t), i < model.clips.count {
+            model.selection = model.clips[i].id
+        }
+        Task { await seek(t) }
+    }
+
+    // MARK: Time ruler
 
     private func timeRuler(pps: Double) -> some View {
         Canvas { ctx, size in
@@ -170,10 +188,11 @@ struct TimelineEditorView: View {
             while t <= model.totalDuration + step {
                 let x = t * pps + 16
                 let major = t.truncatingRemainder(dividingBy: step * 5) < step * 0.01
-                let h: CGFloat = major ? 10 : 5
                 ctx.stroke(
-                    Path { p in p.move(to: CGPoint(x: x, y: size.height - h))
-                        p.addLine(to: CGPoint(x: x, y: size.height)) },
+                    Path { p in
+                        p.move(to: CGPoint(x: x, y: size.height - (major ? 10 : 5)))
+                        p.addLine(to: CGPoint(x: x, y: size.height))
+                    },
                     with: .color(.secondary.opacity(0.5)), lineWidth: 1)
                 if major {
                     ctx.draw(
@@ -192,6 +211,9 @@ struct TimelineEditorView: View {
     }
 
     // MARK: Clips row
+    // Clips carry NO gesture — all interaction is handled by the background seekGesture
+    // or the playhead drag. This ensures clicking anywhere on a clip moves the playhead
+    // to the exact position clicked, not just the clip's start.
 
     private func clipsRow(pps: Double) -> some View {
         ZStack(alignment: .topLeading) {
@@ -201,67 +223,57 @@ struct TimelineEditorView: View {
             }
             ForEach(Array(model.clips.enumerated().dropFirst()), id: \.element.id) { index, clip in
                 transitionBadge(index: index, clip: clip, pps: pps)
-                    .offset(x: model.start(of: index) * pps + 16 - 15,
-                            y: (88 - 42) / 2)
+                    .offset(x: model.start(of: index) * pps + 16 - 15, y: (88 - 44) / 2)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func clipBlock(index: Int, clip: Clip, pps: Double) -> some View {
-        let w = max(clip.duration * pps, 16)
-        let selected = model.selection == clip.id
+        let w    = max(clip.duration * pps, 16)
+        let sel  = model.selection == clip.id
         return ZStack(alignment: .topLeading) {
-            // Thumbnail
             if let img = thumbnails[clip.id] {
                 Image(nsImage: img)
                     .resizable().scaledToFill()
                     .frame(width: w, height: 80).clipped().opacity(0.55)
             }
-            // Tint
             RoundedRectangle(cornerRadius: 6)
-                .fill(selected ? Color.accentColor.opacity(0.4) : Color.gray.opacity(0.3))
-            // Border
+                .fill(sel ? Color.accentColor.opacity(0.4) : Color.gray.opacity(0.28))
             RoundedRectangle(cornerRadius: 6)
-                .stroke(selected ? Color.accentColor : Color.white.opacity(0.15),
-                        lineWidth: selected ? 2 : 1)
-            // Label
+                .stroke(sel ? Color.accentColor : Color.white.opacity(0.15),
+                        lineWidth: sel ? 2 : 1)
             Text("Clip \(index + 1)")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.white)
                 .shadow(color: .black, radius: 1)
                 .padding([.leading, .top], 5)
+            // Trim handles appear only on the selected clip
+            if sel {
+                trimHandle(clip, .start, pps: pps).frame(maxHeight: .infinity, alignment: .leading)
+                trimHandle(clip, .end, pps: pps).frame(maxHeight: .infinity, alignment: .trailing)
+            }
         }
         .frame(width: w, height: 80)
         .clipShape(RoundedRectangle(cornerRadius: 6))
-        // Trim handles
-        .overlay(alignment: .leading) {
-            if selected { trimHandle(clip, .start, pps: pps) }
-        }
-        .overlay(alignment: .trailing) {
-            if selected { trimHandle(clip, .end, pps: pps) }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            let t = model.start(of: index)
-            model.selection = clip.id
-            model.playhead = t
-            Task { await seek(t) }
-        }
+        // No gesture here — falls through to the background seekGesture
     }
 
     private func trimHandle(_ clip: Clip, _ edge: TimelineModel.Edge, pps: Double) -> some View {
         Rectangle()
-            .fill(Color.white.opacity(0.9))
+            .fill(Color.white.opacity(0.85))
             .frame(width: 8, height: 80)
             .onHover { inside in inside ? NSCursor.resizeLeftRight.push() : NSCursor.pop() }
-            .gesture(DragGesture().onChanged { v in
-                model.trim(clip.id, edge: edge,
-                           bySeconds: Double(v.translation.width) / pps)
-            })
+            .gesture(
+                DragGesture()
+                    .onChanged { v in
+                        model.trim(clip.id, edge: edge,
+                                   bySeconds: Double(v.translation.width) / pps)
+                    }
+            )
     }
 
     // MARK: Transition badge
+    // Sits between clips; click cycles cut → fade → slide → swipe → cut.
 
     private func transitionBadge(index: Int, clip: Clip, pps: Double) -> some View {
         let kind = clip.transitionIn
@@ -271,14 +283,14 @@ struct TimelineEditorView: View {
                 Text(kind == "cut" ? "cut" : kind).font(.system(size: 8))
             }
             .foregroundStyle(.white)
-            .frame(width: 30, height: 42)
+            .frame(width: 30, height: 44)
             .background(
                 RoundedRectangle(cornerRadius: 6)
                     .fill(kind == "cut"
                           ? AnyShapeStyle(Color.gray.opacity(0.55))
                           : AnyShapeStyle(Color.accentColor.opacity(0.85)))
             )
-            .shadow(color: .black.opacity(0.4), radius: 2, y: 1)
+            .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
         }
         .buttonStyle(.plain)
         .help("Transition: \(kind)  —  click to change")
@@ -295,25 +307,46 @@ struct TimelineEditorView: View {
 
     private func cycleTransition(_ id: UUID, current: String) {
         let order = ["cut", "fade", "slide", "swipe"]
-        let next = (order.firstIndex(of: current) ?? 0 + 1) % order.count
+        // Parentheses matter: (index + 1) % count, not index ?? (0 + 1)
+        let next = ((order.firstIndex(of: current) ?? 0) + 1) % order.count
         model.setTransition(id, order[next])
     }
 
     // MARK: Playhead
+    // On top of the ZStack so its gesture takes priority over the background.
+    // A 24 pt wide transparent hit-area makes it easy to grab the thin red line.
 
     private func playheadView(pps: Double) -> some View {
         ZStack(alignment: .top) {
+            // Wide invisible hit area so the thin line is easy to grab
+            Rectangle()
+                .fill(Color.clear)
+                .frame(width: 24)
+                .contentShape(Rectangle())
+            // Visual line
             Rectangle().fill(Color.red).frame(width: 2)
-            Diamond()
-                .fill(Color.red)
-                .frame(width: 12, height: 8)
+            // Cap handle
+            Diamond().fill(Color.red).frame(width: 12, height: 8)
         }
         .frame(height: 116)
         .offset(x: model.playhead * pps + 16 - 1)
-        .allowsHitTesting(false)
+        .onHover { inside in inside ? NSCursor.resizeLeftRight.push() : NSCursor.pop() }
+        // High-priority drag so it wins over the background seekGesture
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 0)
+                .updating($playheadDragStart) { _, state, _ in
+                    // Capture the initial playhead position once at drag start
+                    if state == nil { state = model.playhead }
+                }
+                .onChanged { v in
+                    let base  = playheadDragStart ?? model.playhead
+                    let delta = Double(v.translation.width) / pps
+                    applySeek(max(0, min(model.totalDuration, base + delta)))
+                }
+        )
     }
 
-    // MARK: Export
+    // MARK: Export row
 
     private var exportRow: some View {
         HStack {
@@ -326,19 +359,18 @@ struct TimelineEditorView: View {
             Spacer()
             Button("Done") { dismiss() }
             Button("Export edited.mov") { export() }
-                .buttonStyle(.borderedProminent)
-                .disabled(isExporting)
+                .buttonStyle(.borderedProminent).disabled(isExporting)
         }
     }
 
-    // MARK: - Playback helpers
+    // MARK: - Playback
 
     private func togglePlay() {
         isPlaying ? player.pause() : player.play()
         isPlaying.toggle()
     }
 
-    private func seekAndPause(_ t: Double) {
+    private func seekTo(_ t: Double) {
         if isPlaying { player.pause(); isPlaying = false }
         model.playhead = t
         Task { await seek(t) }
@@ -384,7 +416,7 @@ struct TimelineEditorView: View {
 
     private func generateThumbnails() async {
         let asset = AVURLAsset(url: model.sourceURL)
-        let gen = AVAssetImageGenerator(asset: asset)
+        let gen   = AVAssetImageGenerator(asset: asset)
         gen.appliesPreferredTrackTransform = true
         gen.maximumSize = CGSize(width: 200, height: 120)
         gen.requestedTimeToleranceBefore = CMTime(seconds: 0.5, preferredTimescale: 600)
