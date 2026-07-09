@@ -24,6 +24,8 @@ struct ContentView: View {
     @State private var timelineModel: TimelineModel?
     @State private var showPermissions = false
     @State private var saveTask: Task<Void, Never>?
+    @State private var layerPanelHeight: CGFloat = 220
+    @GestureState private var layerHeightDelta: CGFloat = 0
 
     private var cameraOptions: [SourceOption] { recorder.cameraDevices.map { SourceOption(id: $0.id, label: $0.label) } }
     private var screenOptions: [SourceOption] { recorder.displays.map { SourceOption(id: String($0.id), label: $0.label) } }
@@ -247,7 +249,8 @@ struct ContentView: View {
                 }
                 if liveDoc != nil {
                     LayerPanel(doc: liveBinding, selection: $liveSelection, cameras: cameraOptions, screens: screenOptions)
-                        .frame(height: 380)
+                        .frame(height: max(80, layerPanelHeight + layerHeightDelta))
+                    layerResizeHandle
                 }
                 AudioControls(recorder: recorder)
                 SoundboardPanel(board: soundboard)
@@ -257,6 +260,25 @@ struct ContentView: View {
             }
             .padding(12)
         }
+    }
+
+    private var layerResizeHandle: some View {
+        RoundedRectangle(cornerRadius: 2)
+            .fill(Color.secondary.opacity(0.35))
+            .frame(height: 4)
+            .padding(.horizontal, 24)
+            .onHover { inside in
+                if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .updating($layerHeightDelta) { value, state, _ in
+                        state = value.translation.height
+                    }
+                    .onEnded { value in
+                        layerPanelHeight = max(80, layerPanelHeight + value.translation.height)
+                    }
+            )
     }
 
     static func timeString(_ t: TimeInterval) -> String {
