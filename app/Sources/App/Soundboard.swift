@@ -29,6 +29,8 @@ final class Soundboard: ObservableObject {
     @Published private(set) var playingIndex: Int?
     @Published private(set) var isPlaying = false
     @Published var loopMode: LoopMode = .stopAtEnd
+    @Published var musicVolume: Float = 0.7 { didSet { musicPlayer?.volume = musicVolume } }
+    @Published var effectsVolume: Float = 0.9
 
     private var musicPlayer: AVAudioPlayer?
     private var effectPlayers: [AVAudioPlayer] = []
@@ -62,6 +64,7 @@ final class Soundboard: ObservableObject {
         guard let player = try? AVAudioPlayer(contentsOf: music[index]) else { return }
         player.delegate = delegate
         player.numberOfLoops = loopMode == .repeatOne ? -1 : 0
+        player.volume = musicVolume
         player.play()
         musicPlayer = player
         playingIndex = index
@@ -70,6 +73,7 @@ final class Soundboard: ObservableObject {
 
     func playEffect(_ url: URL) {
         guard let player = try? AVAudioPlayer(contentsOf: url) else { return }
+        player.volume = effectsVolume
         player.play()
         effectPlayers.append(player)
         effectPlayers.removeAll { !$0.isPlaying }   // prune finished one-shots
@@ -156,6 +160,13 @@ struct SoundboardPanel: View {
                     Spacer()
                     Button("Add music") { importFiles(.music) }
                 }
+                HStack(spacing: 6) {
+                    Image(systemName: "music.note").font(.caption2)
+                    Slider(value: $board.musicVolume, in: 0...1)
+                    Image(systemName: "speaker.wave.2.fill").font(.caption2)
+                    Slider(value: $board.effectsVolume, in: 0...1)
+                }
+                .help("Music volume · Effects volume")
 
                 if board.music.isEmpty {
                     Text("No music yet — add royalty-free tracks (Pixabay, YouTube Audio Library…).")

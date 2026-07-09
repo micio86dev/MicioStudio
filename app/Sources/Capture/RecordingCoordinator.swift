@@ -40,6 +40,8 @@ final class RecordingCoordinator: ObservableObject {
     @Published var selectedCameraDeviceID: String?
     @Published private(set) var micLevel: Float = 0        // 0..1 for the meter
     @Published private(set) var systemLevel: Float = 0     // 0..1 for the meter
+    @Published var micVolume: Float = 1                    // applied in the export mix
+    @Published var systemVolume: Float = 1
     @Published private(set) var elapsed: TimeInterval = 0
     @Published private(set) var isExporting = false
     @Published private(set) var exportProgress: Double = 0  // 0..1
@@ -192,7 +194,8 @@ final class RecordingCoordinator: ObservableObject {
             let url: URL
             if let template = activeTemplateDoc {
                 status = "Composing video…"
-                url = try await TemplateVideoExporter.export(sessionDir: dir, template: template, timeline: timeline) { [weak self] p in
+                url = try await TemplateVideoExporter.export(sessionDir: dir, template: template, timeline: timeline,
+                                                             micVolume: micVolume, systemVolume: systemVolume) { [weak self] p in
                     Task { @MainActor in self?.exportProgress = p }
                 }
             } else {

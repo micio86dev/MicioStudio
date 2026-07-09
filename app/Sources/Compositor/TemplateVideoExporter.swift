@@ -142,6 +142,7 @@ enum TemplateVideoExporter {
 
     static func export(sessionDir: URL, template: TemplateDoc,
                        timeline: [RecordingCoordinator.SceneSwitch] = [],
+                       micVolume: Float = 1, systemVolume: Float = 1,
                        outputSize: CGSize = CGSize(width: 1920, height: 1080),
                        onProgress: @escaping @Sendable (Double) -> Void) async throws -> URL {
         let composition = AVMutableComposition()
@@ -171,7 +172,8 @@ enum TemplateVideoExporter {
             if i < deviceIDs.count { deviceToTrack[deviceIDs[i]] = comp.trackID }
         }
 
-        for name in ["mic.caf", "system.caf"] {
+        var audioParams: [AVMutableAudioMixInputParameters] = []
+        for (name, volume) in [("mic.caf", micVolume), ("system.caf", systemVolume)] {
             let url = sessionDir.appendingPathComponent(name)
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
             let asset = AVURLAsset(url: url)
@@ -179,6 +181,9 @@ enum TemplateVideoExporter {
             let dur = try await asset.load(.duration)
             let comp = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)!
             try comp.insertTimeRange(CMTimeRange(start: .zero, duration: min(dur, duration)), of: track, at: .zero)
+            let params = AVMutableAudioMixInputParameters(track: comp)
+            params.setVolume(volume, at: .zero)
+            audioParams.append(params)
         }
 
         // For each scene, the ordered camera tracks matching its camera layers (by device;
@@ -206,6 +211,11 @@ enum TemplateVideoExporter {
             throw ExportError.noExportSession
         }
         export.videoComposition = videoComposition
+        if !audioParams.isEmpty {
+            let mix = AVMutableAudioMix()
+            mix.inputParameters = audioParams
+            export.audioMix = mix
+        }
 
         // export(to:as:) reliably runs the export and throws a real error on failure
         // (states(updateInterval:) was leaving the composite stuck at 0%).

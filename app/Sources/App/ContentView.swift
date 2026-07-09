@@ -12,6 +12,7 @@ struct ContentView: View {
     @StateObject private var templates = TemplateStore()
     @StateObject private var soundboard = Soundboard()
     @StateObject private var screenSnap = ScreenSnapshot()
+    @StateObject private var recordings = RecordingsLibrary()
     @State private var activeTemplateID: String?
 
     /// Live preview runs whenever we're not capturing (the recorder needs exclusive device access).
@@ -106,8 +107,10 @@ struct ContentView: View {
             recorder.refreshAudioDevices()
             recorder.refreshCameraDevices()
             templates.load()
+            recordings.reload()
             updateSnapshot()
         }
+        .onChange(of: recorder.combinedURL) { _, _ in recordings.reload() }
         .onChange(of: previewLive) { _, _ in updateSnapshot() }
         .onChange(of: recorder.selectedDisplayID) { _, _ in updateSnapshot() }
         .onChange(of: recorder.selectedWindowID) { _, _ in updateSnapshot() }
@@ -248,6 +251,7 @@ struct ContentView: View {
                 }
                 AudioControls(recorder: recorder)
                 SoundboardPanel(board: soundboard)
+                RecordingsPanel(library: recordings, onEdit: { openTimeline($0) })
                 TemplatesPanel(store: templates, cameras: cameraOptions, screens: screenOptions,
                                previewSessionDir: recorder.lastOutputDir)
             }
@@ -282,6 +286,14 @@ private struct AudioControls: View {
                     Spacer()
                 }
                 .padding(.top, 2)
+                // Export mix volumes (applied to the composited video).
+                HStack(spacing: 6) {
+                    Image(systemName: "mic.fill").font(.caption2)
+                    Slider(value: $recorder.micVolume, in: 0...1)
+                    Image(systemName: "speaker.wave.2.fill").font(.caption2)
+                    Slider(value: $recorder.systemVolume, in: 0...1)
+                }
+                .help("Mic volume · System audio volume (in the export)")
             }
             .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
