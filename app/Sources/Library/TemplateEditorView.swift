@@ -57,6 +57,14 @@ struct SceneBar: View {
             }
             Button { addScene() } label: { Image(systemName: "plus.rectangle.on.rectangle") }
                 .help("Add scene")
+            Button {
+                renaming = doc.activeSceneIndex
+                renameText = doc.activeScene?.name ?? ""
+            } label: { Image(systemName: "pencil") }
+                .help("Rename current scene")
+            Button(role: .destructive) { deleteScene(doc.activeSceneIndex) } label: { Image(systemName: "trash") }
+                .help("Delete current scene")
+                .disabled(doc.scenes.count <= 1)
         }
         .alert("Rename scene", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $renameText)
@@ -125,6 +133,10 @@ struct TemplateEditorView: View {
                 Button("Close") { dismiss() }
             }
             .padding()
+            Divider()
+
+            SceneBar(doc: $doc)
+                .padding(.horizontal).padding(.vertical, 6)
             Divider()
 
             HStack(spacing: 0) {
@@ -338,7 +350,9 @@ private struct DraggableLayer: View {
 
 // MARK: - Layer list + inspector
 
-private struct LayerPanel: View {
+/// Layer list (add / reorder / lock / hide / delete) + inspector for the selected layer.
+/// Shared by the editor sheet and the main-window studio sidebar.
+struct LayerPanel: View {
     @Binding var doc: TemplateDoc
     @Binding var selection: UUID?
     var cameras: [SourceOption] = []

@@ -17,6 +17,8 @@ struct ContentView: View {
     @State private var transition = "fade"   // scene-switch transition: cut | fade | slide | swipe
     @State private var showTimeline = false
     @State private var timelineModel: TimelineModel?
+    @State private var showPermissions = false
+    @State private var saveTask: Task<Void, Never>?
 
     private var cameraOptions: [SourceOption] { recorder.cameraDevices.map { SourceOption(id: $0.id, label: $0.label) } }
     private var screenOptions: [SourceOption] { recorder.displays.map { SourceOption(id: String($0.id), label: $0.label) } }
@@ -50,13 +52,20 @@ struct ContentView: View {
         liveSelection = nil
     }
 
-    /// Persist canvas edits and keep the recorder's active template/cameras in sync.
+    /// Push edits to the recorder immediately; persist to SQLite debounced (so dragging a
+    /// slider on the live canvas doesn't hammer the store on every tick).
     private func saveLive() {
-        guard let id = activeTemplateID, let doc = liveDoc,
-              let row = templates.templates.first(where: { $0.id == id }) else { return }
-        try? templates.save(id: id, name: row.name, doc: doc, isBuiltin: row.isBuiltin)
-        recorder.activeTemplateDoc = doc
-        recorder.activeCameraDeviceIDs = templates.cameraDeviceIDs(templateID: id)
+        recorder.activeTemplateDoc = liveDoc
+        saveTask?.cancel()
+        let id = activeTemplateID
+        let doc = liveDoc
+        saveTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled, let id, let doc,
+                  let row = templates.templates.first(where: { $0.id == id }) else { return }
+            try? templates.save(id: id, name: row.name, doc: doc, isBuiltin: row.isBuiltin)
+            recorder.activeCameraDeviceIDs = templates.cameraDeviceIDs(templateID: id)
+        }
     }
 
     /// Hidden buttons so number keys 1–9 select scenes (works during recording).
@@ -74,128 +83,19 @@ struct ContentView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                Text(Config.productName).font(.largeTitle.bold())
-
-                PermissionsPanel(perms: perms)
-
-                if !templates.templates.isEmpty {
-                    Picker("Template", selection: $activeTemplateID) {
-                        Text("None (raw streams)").tag(String?.none)
-                        ForEach(templates.templates, id: \.id) { t in Text(t.name).tag(String?.some(t.id)) }
-                    }
-                    .frame(maxWidth: 420)
-                    .disabled(recorder.isRecording || recorder.isBusy)
-                    .onChange(of: activeTemplateID) { _, _ in loadLive() }
-                }
-
-                if !recorder.windows.isEmpty {
-                    Picker("Capture", selection: $recorder.selectedWindowID) {
-                        Text("Full display").tag(CGWindowID?.none)
-                        ForEach(recorder.windows) { w in Text(w.label).tag(CGWindowID?.some(w.id)) }
-                    }
-                    .frame(maxWidth: 420)
-                    .disabled(recorder.isRecording || recorder.isBusy)
-                    .help("Capture the whole screen or a single app window (its audio is captured too)")
-                }
-
-                // Studio layout: large editable preview. Drag/resize elements; select one
-                // to change its source (webcam/screen/image) — works during recording too.
-                if liveDoc != nil {
-                    HStack {
-                        SceneBar(doc: liveBinding)
-                        Picker("", selection: $transition) {
-                            Text("Cut").tag("cut"); Text("Fade").tag("fade")
-                            Text("Slide").tag("slide"); Text("Swipe").tag("swipe")
-                        }
-                        .labelsHidden().frame(width: 90)
-                        .help("Transition used when switching scenes")
-                    }
-                    // Number keys 1–9 switch scenes (recorded during capture).
-                    .background(sceneShortcuts)
-                    .onChange(of: liveDoc?.activeSceneIndex) { _, idx in
-                        if let idx, recorder.isRecording { recorder.recordSceneSwitch(to: idx, transition: transition) }
-                    }
-                    CanvasView(doc: liveBinding, selection: $liveSelection)
-                        .frame(minHeight: 320, maxHeight: 460)
-                        .background(Color.black)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.secondary.opacity(0.3)))
-
-                    if let idx = liveDoc?.layers.firstIndex(where: { $0.id == liveSelection }) {
-                        GroupBox("Selected element") {
-                            Inspector(layer: liveLayerBinding(idx), cameras: cameraOptions, screens: screenOptions)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    } else {
-                        Text("Tap an element to change its source, or drag to move / drag a corner to resize (⌥ to crop).")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                } else {
-                    Text("Pick a template above to lay out the scene, or record raw streams.")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-
-                AudioControls(recorder: recorder)
-
-                SoundboardPanel(board: soundboard)
-
-                if recorder.isRecording || recorder.elapsed > 0 {
-                    HStack(spacing: 8) {
-                        if recorder.isRecording { Circle().fill(.red).frame(width: 10, height: 10) }
-                        Text(Self.timeString(recorder.elapsed))
-                            .font(.system(.title2, design: .monospaced).weight(.medium))
-                            .foregroundStyle(recorder.isRecording ? .red : .secondary)
-                    }
-                }
-
-                Button(action: recorder.toggle) {
-                    Label(recorder.isRecording ? "Stop" : "Record",
-                          systemImage: recorder.isRecording ? "stop.circle.fill" : "record.circle")
-                        .font(.title2)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(recorder.isRecording ? .red : .accentColor)
-                .disabled(recorder.isBusy)
-
-                Text(recorder.status.isEmpty ? "Idle" : recorder.status)
-                    .font(.callout).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center).textSelection(.enabled)
-                    .frame(maxWidth: .infinity)
-
-                if recorder.isExporting {
-                    VStack(spacing: 4) {
-                        ProgressView(value: recorder.exportProgress)
-                        Text("Exporting… \(Int(recorder.exportProgress * 100))%")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: 320)
-                }
-                if let combined = recorder.combinedURL {
-                    HStack {
-                        Button { NSWorkspace.shared.open(combined) } label: {
-                            Label("Open last export", systemImage: "play.rectangle.fill")
-                        }
-                        Button { openTimeline(combined) } label: {
-                            Label("Edit (timeline)", systemImage: "scissors")
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                }
-                if let dir = recorder.lastOutputDir {
-                    Button("Reveal recording folder") { NSWorkspace.shared.activateFileViewerSelecting([dir]) }
-                        .buttonStyle(.link)
-                }
-
-                TemplatesPanel(store: templates, cameras: cameraOptions, screens: screenOptions,
-                               previewSessionDir: recorder.lastOutputDir)
+        VStack(spacing: 0) {
+            topBar
+            Divider()
+            HStack(spacing: 0) {
+                previewPane
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Divider()
+                toolsSidebar
+                    .frame(width: 344)
             }
-            .padding(24)
         }
-        .frame(minWidth: 660, minHeight: 680)
+        .frame(minWidth: 1140, minHeight: 700)
+        .background(sceneShortcuts)
         .task {
             await perms.refresh()
             await recorder.refreshDisplays()
@@ -214,6 +114,125 @@ struct ContentView: View {
             guard duration > 0.2 else { return }
             timelineModel = TimelineModel(sourceURL: url, sourceDuration: duration)
             showTimeline = true
+        }
+    }
+
+    // MARK: - Studio layout pieces
+
+    private var topBar: some View {
+        HStack(spacing: 14) {
+            Text(Config.productName).font(.title2.bold())
+            Button { showPermissions.toggle() } label: {
+                Label(perms.allReady ? "Permissions" : "Permissions needed",
+                      systemImage: perms.allReady ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
+                    .font(.caption)
+            }
+            .tint(perms.allReady ? .green : .orange)
+            Spacer()
+            if recorder.isRecording || recorder.elapsed > 0 {
+                HStack(spacing: 6) {
+                    if recorder.isRecording { Circle().fill(.red).frame(width: 9, height: 9) }
+                    Text(Self.timeString(recorder.elapsed))
+                        .font(.system(.title3, design: .monospaced).weight(.medium))
+                        .foregroundStyle(recorder.isRecording ? .red : .secondary)
+                }
+            }
+            Button(action: recorder.toggle) {
+                Label(recorder.isRecording ? "Stop" : "Record",
+                      systemImage: recorder.isRecording ? "stop.circle.fill" : "record.circle")
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(recorder.isRecording ? .red : .accentColor)
+            .disabled(recorder.isBusy)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 9)
+    }
+
+    private var previewPane: some View {
+        VStack(spacing: 8) {
+            if liveDoc != nil {
+                HStack {
+                    SceneBar(doc: liveBinding)
+                    Picker("", selection: $transition) {
+                        Text("Cut").tag("cut"); Text("Fade").tag("fade")
+                        Text("Slide").tag("slide"); Text("Swipe").tag("swipe")
+                    }
+                    .labelsHidden().frame(width: 92).help("Scene-switch transition")
+                }
+                .onChange(of: liveDoc?.activeSceneIndex) { _, idx in
+                    if let idx, recorder.isRecording { recorder.recordSceneSwitch(to: idx, transition: transition) }
+                }
+                CanvasView(doc: liveBinding, selection: $liveSelection)
+                    .background(Color.black)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(.secondary.opacity(0.3)))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                VStack(spacing: 8) {
+                    Image(systemName: "rectangle.on.rectangle.angled")
+                        .font(.system(size: 42)).foregroundStyle(.secondary)
+                    Text("Pick a template on the right to lay out your scene.").foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            statusBar
+        }
+        .padding(12)
+    }
+
+    private var statusBar: some View {
+        VStack(spacing: 6) {
+            if recorder.isExporting {
+                HStack {
+                    ProgressView(value: recorder.exportProgress).frame(maxWidth: 240)
+                    Text("Exporting \(Int(recorder.exportProgress * 100))%").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            HStack(spacing: 8) {
+                Text(recorder.status.isEmpty ? "Idle" : recorder.status)
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Spacer()
+                if let combined = recorder.combinedURL {
+                    Button { NSWorkspace.shared.open(combined) } label: { Label("Open", systemImage: "play.rectangle.fill") }
+                    Button { openTimeline(combined) } label: { Label("Edit", systemImage: "scissors") }
+                }
+                if let dir = recorder.lastOutputDir {
+                    Button { NSWorkspace.shared.activateFileViewerSelecting([dir]) } label: { Image(systemName: "folder") }
+                }
+            }
+            .buttonStyle(.bordered).controlSize(.small)
+        }
+    }
+
+    private var toolsSidebar: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                if !perms.allReady || showPermissions { PermissionsPanel(perms: perms) }
+                if !templates.templates.isEmpty {
+                    Picker("Template", selection: $activeTemplateID) {
+                        Text("None (raw)").tag(String?.none)
+                        ForEach(templates.templates, id: \.id) { t in Text(t.name).tag(String?.some(t.id)) }
+                    }
+                    .disabled(recorder.isRecording || recorder.isBusy)
+                    .onChange(of: activeTemplateID) { _, _ in loadLive() }
+                }
+                if !recorder.windows.isEmpty {
+                    Picker("Capture", selection: $recorder.selectedWindowID) {
+                        Text("Full display").tag(CGWindowID?.none)
+                        ForEach(recorder.windows) { w in Text(w.label).tag(CGWindowID?.some(w.id)) }
+                    }
+                    .disabled(recorder.isRecording || recorder.isBusy)
+                }
+                if liveDoc != nil {
+                    LayerPanel(doc: liveBinding, selection: $liveSelection, cameras: cameraOptions, screens: screenOptions)
+                        .frame(height: 380)
+                }
+                AudioControls(recorder: recorder)
+                SoundboardPanel(board: soundboard)
+                TemplatesPanel(store: templates, cameras: cameraOptions, screens: screenOptions,
+                               previewSessionDir: recorder.lastOutputDir)
+            }
+            .padding(12)
         }
     }
 

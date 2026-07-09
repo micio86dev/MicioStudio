@@ -200,7 +200,9 @@ enum TemplateVideoExporter {
 
         let out = sessionDir.appendingPathComponent("composed.mov")
         try? FileManager.default.removeItem(at: out)
-        guard let export = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetHEVCHighestQuality) else {
+        // HEVC1920x1080 is single-pass hardware HEVC — far faster than HighestQuality's
+        // multi-pass encode, with negligible quality loss at 1080p.
+        guard let export = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetHEVC1920x1080) else {
             throw ExportError.noExportSession
         }
         export.videoComposition = videoComposition
