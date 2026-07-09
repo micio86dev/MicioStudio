@@ -113,6 +113,10 @@ struct ContentView: View {
             recorder.refreshAudioDevices()
             recorder.refreshCameraDevices()
             templates.load()
+            let saved = UserDefaults.standard.string(forKey: "lastActiveTemplateID")
+            if let saved, templates.templates.contains(where: { $0.id == saved }) {
+                activeTemplateID = saved
+            }
             recordings.reload()
             updateSnapshot()
         }
@@ -252,7 +256,10 @@ struct ContentView: View {
                         ForEach(templates.templates, id: \.id) { t in Text(t.name).tag(String?.some(t.id)) }
                     }
                     .disabled(recorder.isRecording || recorder.isBusy)
-                    .onChange(of: activeTemplateID) { _, _ in loadLive() }
+                    .onChange(of: activeTemplateID) { _, id in
+            UserDefaults.standard.set(id, forKey: "lastActiveTemplateID")
+            loadLive()
+        }
                 }
                 if !recorder.windows.isEmpty {
                     Picker("Capture", selection: $recorder.selectedWindowID) {

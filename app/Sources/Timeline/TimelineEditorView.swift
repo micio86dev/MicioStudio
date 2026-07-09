@@ -1,5 +1,22 @@
 import SwiftUI
 import AVKit
+import AppKit
+
+/// Direct NSViewRepresentable wrapper for AVPlayerView — avoids a SwiftUI/AVKit
+/// metadata crash (getSuperclassMetadata fatal error) triggered by VideoPlayer on macOS 26
+/// when presented inside a sheet with a fresh AVPlayer.
+private struct PlayerView: NSViewRepresentable {
+    let player: AVPlayer
+    func makeNSView(context: Context) -> AVPlayerView {
+        let v = AVPlayerView()
+        v.player = player
+        v.controlsStyle = .none
+        return v
+    }
+    func updateNSView(_ nsView: AVPlayerView, context: Context) {
+        if nsView.player !== player { nsView.player = player }
+    }
+}
 
 /// TikTok-style timeline editor: trim/split/delete clips of a recording and put
 /// fade/slide/swipe transitions between the cuts, with a live preview and zoom.
@@ -16,7 +33,7 @@ struct TimelineEditorView: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            VideoPlayer(player: player)
+            PlayerView(player: player)
                 .frame(minHeight: 260)
                 .background(Color.black)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
