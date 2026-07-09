@@ -113,6 +113,7 @@ struct TemplateEditorView: View {
     @State private var errorText: String?
     @State private var showPreview = false
     @StateObject private var sources = PreviewSources()
+    @StateObject private var screenSnap = ScreenSnapshot()
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -144,7 +145,8 @@ struct TemplateEditorView: View {
                     if showPreview {
                         CompositePreview(doc: doc, sources: sources)
                     } else {
-                        CanvasView(doc: $doc, selection: $selection)
+                        CanvasView(doc: $doc, selection: $selection, live: true,
+                                   screenImage: screenSnap.image, defaultCameraID: cameras.first?.id)
                     }
                 }
                 .padding()
@@ -161,6 +163,8 @@ struct TemplateEditorView: View {
             }
         }
         .frame(minWidth: 780, minHeight: 500)
+        .task { screenSnap.start(displayID: nil, windowID: nil) }
+        .onDisappear { screenSnap.stop() }
     }
 
     private func save() {
@@ -204,6 +208,10 @@ struct TemplateEditorView: View {
 struct CanvasView: View {
     @Binding var doc: TemplateDoc
     @Binding var selection: UUID?
+    /// When true, layers show their live source (webcam / screen snapshot / image).
+    var live = false
+    var screenImage: NSImage?
+    var defaultCameraID: String?
 
     var body: some View {
         GeometryReader { geo in
@@ -211,6 +219,7 @@ struct CanvasView: View {
             let size = fit(aspect: ar, in: geo.size)
             ZStack {
                 Rectangle().fill(Color.black)
+                if live { backgroundContent }
                 Rectangle().stroke(.white.opacity(0.15))
                 ForEach(doc.layers) { layer in
                     if layer.rect != nil {
@@ -218,6 +227,9 @@ struct CanvasView: View {
                             layer: layer,
                             selected: selection == layer.id,
                             canvas: size,
+                            live: live,
+                            screenImage: screenImage,
+                            defaultCameraID: defaultCameraID,
                             onSelect: { selection = layer.id },
                             onChange: { newRect in
                                 if let i = doc.layers.firstIndex(where: { $0.id == layer.id }) {
@@ -229,6 +241,26 @@ struct CanvasView: View {
             }
             .frame(width: size.width, height: size.height)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// Live full-canvas background (SwiftUI approximation of the renderer's background).
+    @ViewBuilder private var backgroundContent: some View {
+        if let bg = doc.layers.first(where: { $0.kind == .background }) {
+            switch bg.source ?? .color {
+            case .color:
+                Color(hexString: bg.color ?? "#0B0B0F")
+            case .screen:
+                if let img = screenImage {
+                    Image(nsImage: img).resizable().scaledToFill()
+                        .blur(radius: CGFloat((bg.blur ?? 40) / 6))
+                        .overlay(Color.black.opacity(bg.darken ?? 0.35))
+                } else { Color.black }
+            case .image:
+                if let p = bg.path, let img = NSImage(contentsOfFile: (p as NSString).expandingTildeInPath) {
+                    Image(nsImage: img).resizable().scaledToFill()
+                } else { Color.black }
+            }
         }
     }
 
@@ -244,13 +276,16 @@ private struct DraggableLayer: View {
     let layer: Layer
     let selected: Bool
     let canvas: CGSize
+    var live: Bool = false
+    var screenImage: NSImage?
+    var defaultCameraID: String?
     let onSelect: () -> Void
     let onChange: (RectN) -> Void
 
     // Local live rect during a drag. Updating a LOCAL @State (not `doc`) means only this
     // layer re-renders, not the whole editor. Kept until the committed rect propagates
     // back through `layer` — which removes the one-frame snap-back @GestureState caused.
-    @State private var live: RectN?
+    @State private var dragRect: RectN?
     private let minSize = 0.05
 
     private var committed: RectN { layer.rect ?? RectN(x: 0, y: 0, w: 0.1, h: 0.1) }
@@ -259,12 +294,16 @@ private struct DraggableLayer: View {
     private var freeResize: Bool { layer.kind == .camera || NSEvent.modifierFlags.contains(.option) }
 
     var body: some View {
-        let base = live ?? committed
+        let base = dragRect ?? committed
         let w = CGFloat(base.w) * canvas.width
         let h = CGFloat(base.h) * canvas.height
         ZStack(alignment: .bottomTrailing) {
+            liveContent
+                .frame(width: max(w, 8), height: max(h, 8))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .allowsHitTesting(false)
             RoundedRectangle(cornerRadius: 6)
-                .fill(color.opacity(layer.hidden == true ? 0.1 : 0.28))
+                .fill(color.opacity(live ? 0.0 : (layer.hidden == true ? 0.1 : 0.28)))
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(color, lineWidth: selected ? 2.5 : 1))
                 .overlay(badge)
                 .contentShape(Rectangle())
@@ -280,7 +319,30 @@ private struct DraggableLayer: View {
         .frame(width: max(w, 8), height: max(h, 8))
         .position(x: CGFloat(base.x) * canvas.width + w / 2, y: CGFloat(base.y) * canvas.height + h / 2)
         .opacity(layer.hidden == true ? 0.55 : 1)
-        .onChange(of: layer.rect) { _, r in if r == live { live = nil } }
+        .onChange(of: layer.rect) { _, r in if r == dragRect { dragRect = nil } }
+    }
+
+    /// The live source shown behind the drag chrome (webcam feed / screen snapshot / image).
+    @ViewBuilder private var liveContent: some View {
+        if live && layer.hidden != true {
+            switch layer.kind {
+            case .camera:
+                WebcamPreview(deviceID: layer.deviceId ?? defaultCameraID, active: true)
+            case .screen:
+                if let img = screenImage {
+                    Image(nsImage: img).resizable().scaledToFill()
+                } else { Color.black }
+            case .image:
+                if let p = layer.path, !p.isEmpty,
+                   let img = NSImage(contentsOfFile: (p as NSString).expandingTildeInPath) {
+                    Image(nsImage: img).resizable().scaledToFill()
+                } else { Color.gray.opacity(0.3) }
+            case .background:
+                Color.clear
+            }
+        } else {
+            Color.clear
+        }
     }
 
     private var badge: some View {
@@ -294,20 +356,20 @@ private struct DraggableLayer: View {
 
     private var moveGesture: some Gesture {
         DragGesture()
-            .onChanged { v in guard !locked else { return }; live = moved(committed, by: v.translation) }
+            .onChanged { v in guard !locked else { return }; dragRect = moved(committed, by: v.translation) }
             .onEnded { v in
                 guard !locked else { return }
                 let final = moved(committed, by: v.translation)
-                live = final; onSelect(); onChange(final)
+                dragRect = final; onSelect(); onChange(final)
             }
     }
 
     private var resizeGesture: some Gesture {
         DragGesture()
-            .onChanged { v in live = resized(committed, by: v.translation, free: freeResize) }
+            .onChanged { v in dragRect = resized(committed, by: v.translation, free: freeResize) }
             .onEnded { v in
                 let final = resized(committed, by: v.translation, free: freeResize)
-                live = final; onSelect(); onChange(final)
+                dragRect = final; onSelect(); onChange(final)
             }
     }
 

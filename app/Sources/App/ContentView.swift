@@ -11,7 +11,11 @@ struct ContentView: View {
     @StateObject private var perms = PermissionManager()
     @StateObject private var templates = TemplateStore()
     @StateObject private var soundboard = Soundboard()
+    @StateObject private var screenSnap = ScreenSnapshot()
     @State private var activeTemplateID: String?
+
+    /// Live preview runs whenever we're not capturing (the recorder needs exclusive device access).
+    private var previewLive: Bool { !recorder.isRecording && !recorder.isBusy }
     @State private var liveDoc: TemplateDoc?
     @State private var liveSelection: UUID?
     @State private var transition = "fade"   // scene-switch transition: cut | fade | slide | swipe
@@ -102,9 +106,22 @@ struct ContentView: View {
             recorder.refreshAudioDevices()
             recorder.refreshCameraDevices()
             templates.load()
+            updateSnapshot()
         }
+        .onChange(of: previewLive) { _, _ in updateSnapshot() }
+        .onChange(of: recorder.selectedDisplayID) { _, _ in updateSnapshot() }
+        .onChange(of: recorder.selectedWindowID) { _, _ in updateSnapshot() }
         .sheet(isPresented: $showTimeline) {
             if let model = timelineModel { TimelineEditorView(model: model) }
+        }
+    }
+
+    /// Run the screen snapshot loop only while the live preview is active (not recording).
+    private func updateSnapshot() {
+        if previewLive {
+            screenSnap.start(displayID: recorder.selectedDisplayID, windowID: recorder.selectedWindowID)
+        } else {
+            screenSnap.stop()
         }
     }
 
@@ -162,7 +179,8 @@ struct ContentView: View {
                 .onChange(of: liveDoc?.activeSceneIndex) { _, idx in
                     if let idx, recorder.isRecording { recorder.recordSceneSwitch(to: idx, transition: transition) }
                 }
-                CanvasView(doc: liveBinding, selection: $liveSelection)
+                CanvasView(doc: liveBinding, selection: $liveSelection, live: previewLive,
+                           screenImage: screenSnap.image, defaultCameraID: recorder.selectedCameraDeviceID)
                     .background(Color.black)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(.secondary.opacity(0.3)))
