@@ -131,6 +131,8 @@ struct Layer: Identifiable, Equatable {
     var bgImage: String?    // camera: cover image path when bgMode == image
     var locked: Bool?       // editor: can't move/resize
     var hidden: Bool?       // not rendered (OBS-style visibility)
+    var aspectMode: String? // resize lock: free | lock | 16:9 | 4:3 | 9:16 | 1:1
+    // (fit is declared above under background; reused for framed layers: cover | contain)
 }
 
 // MARK: - Tagged Codable (maps the flat model to the `"type"` / `"source"` JSON)
@@ -139,7 +141,7 @@ extension Layer: Codable {
     private enum Keys: String, CodingKey {
         case type, source, blur, darken, color, fit
         case rect, cornerRadius, shadow, mirror, path, opacity, deviceId, bgMode, bgImage
-        case locked, hidden
+        case locked, hidden, aspectMode
     }
 
     init(from decoder: Decoder) throws {
@@ -161,6 +163,7 @@ extension Layer: Codable {
         bgImage = try c.decodeIfPresent(String.self, forKey: .bgImage)
         locked = try c.decodeIfPresent(Bool.self, forKey: .locked)
         hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden)
+        aspectMode = try c.decodeIfPresent(String.self, forKey: .aspectMode)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -168,6 +171,8 @@ extension Layer: Codable {
         try c.encode(kind, forKey: .type)
         try c.encodeIfPresent(locked, forKey: .locked)
         try c.encodeIfPresent(hidden, forKey: .hidden)
+        try c.encodeIfPresent(aspectMode, forKey: .aspectMode)
+        if kind != .background { try c.encodeIfPresent(fit, forKey: .fit) }
         switch kind {
         case .background:
             try c.encodeIfPresent(source, forKey: .source)

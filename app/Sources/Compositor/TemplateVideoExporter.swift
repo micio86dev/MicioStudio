@@ -207,12 +207,10 @@ enum TemplateVideoExporter {
         }
         export.videoComposition = videoComposition
 
-        for try await state in export.states(updateInterval: 0.25) {
-            if case .exporting(let progress) = state { onProgress(progress.fractionCompleted) }
-        }
-        guard export.status == .completed else {
-            throw ExportError.failed(export.error?.localizedDescription ?? "export failed")
-        }
+        // export(to:as:) reliably runs the export and throws a real error on failure
+        // (states(updateInterval:) was leaving the composite stuck at 0%).
+        onProgress(0.05)
+        try await export.export(to: out, as: .mov)
         onProgress(1.0)
         return out
     }

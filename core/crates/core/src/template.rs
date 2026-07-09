@@ -106,6 +106,10 @@ pub struct ScreenLayer {
     pub hidden: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub locked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aspect_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -131,6 +135,10 @@ pub struct CameraLayer {
     pub hidden: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub locked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aspect_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -146,6 +154,10 @@ pub struct ImageLayer {
     pub hidden: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub locked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aspect_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit: Option<String>,
 }
 
 fn one() -> f32 {

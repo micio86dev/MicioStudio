@@ -201,9 +201,10 @@ struct ContentView: View {
     private var statusBar: some View {
         VStack(spacing: 6) {
             if recorder.isExporting {
-                HStack {
-                    ProgressView(value: recorder.exportProgress).frame(maxWidth: 240)
-                    Text("Exporting \(Int(recorder.exportProgress * 100))%").font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(recorder.exportProgress >= 1 ? "Finishing…" : "Composing video…")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             HStack(spacing: 8) {

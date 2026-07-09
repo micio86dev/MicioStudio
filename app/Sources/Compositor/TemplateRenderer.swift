@@ -40,7 +40,7 @@ enum TemplateRenderer {
             case .screen:
                 guard let img = screenCI ?? placeholder(.systemBlue, outputSize), let r = layer.rect else { continue }
                 result = framed(img, rect: r, cornerRadius: layer.cornerRadius ?? 0,
-                                shadow: layer.shadow, mirror: false, canvas: outputSize).composited(over: result)
+                                shadow: layer.shadow, mirror: false, fit: layer.fit, canvas: outputSize).composited(over: result)
             case .camera:
                 var img = cameraIndex < cameras.count ? cameras[cameraIndex]
                                                       : (placeholder(.systemGreen, outputSize) ?? screenCI ?? CIImage.empty())
@@ -50,7 +50,7 @@ enum TemplateRenderer {
                 }
                 guard let r = layer.rect else { continue }
                 result = framed(img, rect: r, cornerRadius: layer.cornerRadius ?? 0,
-                                shadow: layer.shadow, mirror: layer.mirror ?? false, canvas: outputSize).composited(over: result)
+                                shadow: layer.shadow, mirror: layer.mirror ?? false, fit: layer.fit, canvas: outputSize).composited(over: result)
             case .image:
                 guard let r = layer.rect,
                       let path = layer.path.map({ ($0 as NSString).expandingTildeInPath }),
@@ -59,7 +59,7 @@ enum TemplateRenderer {
                 var img = CIImage(cgImage: cg)
                 if let o = layer.opacity, o < 1 { img = img.applyingFilter("CIColorMatrix", parameters: [
                     "inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(o))]) }
-                result = framed(img, rect: r, cornerRadius: 0, shadow: nil, mirror: false, canvas: outputSize).composited(over: result)
+                result = framed(img, rect: r, cornerRadius: 0, shadow: nil, mirror: false, fit: layer.fit, canvas: outputSize).composited(over: result)
             }
         }
         return result
@@ -99,7 +99,7 @@ enum TemplateRenderer {
     /// Scale `image` to fill `rect` (aspect fill), round its corners, add a drop shadow.
     /// Template rects are top-left origin; Core Image is bottom-left, so flip Y.
     private static func framed(_ image: CIImage, rect r: RectN, cornerRadius: Double,
-                               shadow: ShadowN?, mirror: Bool, canvas: CGSize) -> CIImage {
+                               shadow: ShadowN?, mirror: Bool, fit: String?, canvas: CGSize) -> CIImage {
         let px = CGRect(x: r.x * canvas.width,
                         y: (1 - r.y - r.h) * canvas.height,   // Y flip
                         width: r.w * canvas.width, height: r.h * canvas.height)
@@ -108,7 +108,7 @@ enum TemplateRenderer {
             src = src.transformed(by: CGAffineTransform(scaleX: -1, y: 1))
                      .transformed(by: CGAffineTransform(translationX: src.extent.width, y: 0))
         }
-        var placed = aspectFill(src, into: px)
+        var placed = fit == "contain" ? aspectFit(src, into: px) : aspectFill(src, into: px)
         let radius = CGFloat(cornerRadius)
         if radius > 0 {
             placed = placed.applyingFilter("CISourceInCompositing", parameters: [
@@ -177,6 +177,17 @@ enum TemplateRenderer {
         let tx = rect.midX - s.midX
         let ty = rect.midY - s.midY
         return scaled.transformed(by: CGAffineTransform(translationX: tx, y: ty)).cropped(to: rect)
+    }
+
+    /// Scale to FIT inside `rect` (contain / letterbox), centered — no cropping.
+    private static func aspectFit(_ image: CIImage, into rect: CGRect) -> CIImage {
+        let e = image.extent
+        guard e.width > 0, e.height > 0 else { return image.cropped(to: rect) }
+        let scale = min(rect.width / e.width, rect.height / e.height)
+        let scaled = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let s = scaled.extent
+        return scaled.transformed(by: CGAffineTransform(translationX: rect.midX - s.midX,
+                                                        y: rect.midY - s.midY)).cropped(to: rect)
     }
 
     private static func roundedMask(_ rect: CGRect, radius: CGFloat) -> CIImage {

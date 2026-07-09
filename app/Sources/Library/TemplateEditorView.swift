@@ -290,8 +290,12 @@ private struct DraggableLayer: View {
 
     private var committed: RectN { layer.rect ?? RectN(x: 0, y: 0, w: 0.1, h: 0.1) }
     private var locked: Bool { layer.locked == true }
-    // Webcam fills its box (cover), so free-resize by default; Option frees the others.
-    private var freeResize: Bool { layer.kind == .camera || NSEvent.modifierFlags.contains(.option) }
+    // Option always frees; otherwise honor the layer's aspect mode (webcam free by default).
+    private var freeResize: Bool {
+        if NSEvent.modifierFlags.contains(.option) { return true }
+        if let m = layer.aspectMode { return m == "free" }
+        return layer.kind == .camera
+    }
 
     var body: some View {
         let base = dragRect ?? committed
@@ -389,15 +393,29 @@ private struct DraggableLayer: View {
             r.h = min(max(minSize, base.h + Double(t.height / canvas.height)), 1 - base.y)
             return r
         }
-        let aspect = base.w / max(base.h, 0.0001)
-        var w = max(minSize, base.w + Double(t.width / canvas.width))
-        var h = w / aspect
-        if base.x + w > 1 { w = 1 - base.x; h = w / aspect }
-        if base.y + h > 1 { h = 1 - base.y; w = h * aspect }
+        // Enforce the target ratio in PIXEL space (so "16:9" is visually 16:9 on the canvas).
+        let cw = Double(canvas.width), ch = Double(canvas.height)
+        let ratio = visualRatio(base, cw: cw, ch: ch)
+        var wpx = max(8, base.w * cw + Double(t.width))
+        var hpx = wpx / ratio
+        let maxW = (1 - base.x) * cw, maxH = (1 - base.y) * ch
+        if wpx > maxW { wpx = maxW; hpx = wpx / ratio }
+        if hpx > maxH { hpx = maxH; wpx = hpx * ratio }
         var r = base
-        r.w = max(minSize, w)
-        r.h = max(minSize, h)
+        r.w = max(minSize, wpx / cw)
+        r.h = max(minSize, hpx / ch)
         return r
+    }
+
+    /// Target width/height ratio in pixels for the layer's aspect mode.
+    private func visualRatio(_ base: RectN, cw: Double, ch: Double) -> Double {
+        switch layer.aspectMode {
+        case "16:9": return 16.0 / 9
+        case "4:3": return 4.0 / 3
+        case "9:16": return 9.0 / 16
+        case "1:1": return 1.0
+        default: return (base.w * cw) / max(base.h * ch, 0.0001)   // lock current visual ratio
+        }
     }
 
     private var color: Color {
@@ -536,6 +554,7 @@ struct Inspector: View {
                 devicePicker(layer.kind == .camera ? "Webcam" : "Monitor",
                              options: layer.kind == .camera ? cameras : screens)
                 slider("Corner radius", Binding(get: { layer.cornerRadius ?? 0 }, set: { layer.cornerRadius = $0 }), 0...64)
+                aspectAndFit
                 if layer.kind == .camera {
                     Toggle("Mirror", isOn: Binding(get: { layer.mirror ?? false }, set: { layer.mirror = $0 }))
                     Picker("Background", selection: Binding(
@@ -554,6 +573,7 @@ struct Inspector: View {
             case .image:
                 slider("Opacity", Binding(get: { layer.opacity ?? 1 }, set: { layer.opacity = $0 }), 0...1)
                 imageField("Image", Binding(get: { layer.path ?? "" }, set: { layer.path = $0 }))
+                aspectAndFit
             }
             if let r = layer.rect {
                 Text(String(format: "x %.2f  y %.2f  w %.2f  h %.2f", r.x, r.y, r.w, r.h))
@@ -568,6 +588,20 @@ struct Inspector: View {
             Text("\(label): \(Int(value.wrappedValue))").font(.caption)
             Slider(value: value, in: range)
         }
+    }
+
+    /// Aspect-ratio lock (for resize) + content fit (cover/contain) for framed layers.
+    @ViewBuilder private var aspectAndFit: some View {
+        Picker("Aspect", selection: Binding(get: { layer.aspectMode ?? "lock" }, set: { layer.aspectMode = $0 })) {
+            Text("Free").tag("free"); Text("Lock").tag("lock")
+            Text("16:9").tag("16:9"); Text("4:3").tag("4:3")
+            Text("9:16").tag("9:16"); Text("1:1").tag("1:1")
+        }
+        .font(.caption)
+        Picker("Fit", selection: Binding(get: { layer.fit ?? "cover" }, set: { layer.fit = $0 })) {
+            Text("Cover").tag("cover"); Text("Contain").tag("contain")
+        }
+        .font(.caption)
     }
 
     /// Pick an image file via a panel (no manual paths). Shows the filename + a clear button.

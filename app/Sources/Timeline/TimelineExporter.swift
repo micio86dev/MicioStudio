@@ -155,12 +155,8 @@ enum TimelineExporter {
             throw ExportError.noExportSession
         }
         export.videoComposition = videoComposition
-        for try await state in export.states(updateInterval: 0.25) {
-            if case .exporting(let p) = state { onProgress(p.fractionCompleted) }
-        }
-        guard export.status == .completed else {
-            throw ExportError.failed(export.error?.localizedDescription ?? "export failed")
-        }
+        onProgress(0.05)
+        try await export.export(to: out, as: .mov)
         onProgress(1.0)
         return out
     }
