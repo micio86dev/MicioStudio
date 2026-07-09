@@ -282,23 +282,29 @@ private struct DraggableLayer: View {
     let onSelect: () -> Void
     let onChange: (RectN) -> Void
 
-    // Local live rect during a drag. Updating a LOCAL @State (not `doc`) means only this
-    // layer re-renders, not the whole editor. Kept until the committed rect propagates
-    // back through `layer` — which removes the one-frame snap-back @GestureState caused.
+    // @GestureState holds the live translation while dragging; SwiftUI keeps it stable
+    // across re-renders without recreating the gesture (the root cause of flicker).
+    // dragRect bridges the gap between onEnded and the parent propagating layer.rect back.
+    @GestureState private var dragOffset: CGSize = .zero
     @State private var dragRect: RectN?
     private let minSize = 0.05
 
     private var committed: RectN { layer.rect ?? RectN(x: 0, y: 0, w: 0.1, h: 0.1) }
     private var locked: Bool { layer.locked == true }
-    // Option always frees; otherwise honor the layer's aspect mode (webcam free by default).
     private var freeResize: Bool {
         if NSEvent.modifierFlags.contains(.option) { return true }
         if let m = layer.aspectMode { return m == "free" }
         return layer.kind == .camera
     }
 
+    // Priority: live drag offset → committed-but-not-yet-propagated → parent value.
+    // Extracted so @ViewBuilder body doesn't try to parse the if/else as a View expression.
+    private var activeBase: RectN {
+        dragOffset != .zero ? moved(committed, by: dragOffset, snap: true) : (dragRect ?? committed)
+    }
+
     var body: some View {
-        let base = dragRect ?? committed
+        let base = activeBase
         let w = CGFloat(base.w) * canvas.width
         let h = CGFloat(base.h) * canvas.height
         ZStack(alignment: .bottomTrailing) {
@@ -326,7 +332,6 @@ private struct DraggableLayer: View {
         .onChange(of: layer.rect) { _, r in if r == dragRect { dragRect = nil } }
     }
 
-    /// The live source shown behind the drag chrome (webcam feed / screen snapshot / image).
     @ViewBuilder private var liveContent: some View {
         if live && layer.hidden != true {
             switch layer.kind {
@@ -359,11 +364,14 @@ private struct DraggableLayer: View {
     }
 
     private var moveGesture: some Gesture {
-        DragGesture()
-            .onChanged { v in guard !locked else { return }; dragRect = moved(committed, by: v.translation) }
+        DragGesture(minimumDistance: 2)
+            .updating($dragOffset) { v, state, _ in
+                guard !locked else { return }
+                state = v.translation
+            }
             .onEnded { v in
                 guard !locked else { return }
-                let final = moved(committed, by: v.translation)
+                let final = moved(committed, by: v.translation, snap: true)
                 dragRect = final; onSelect(); onChange(final)
             }
     }
@@ -377,11 +385,27 @@ private struct DraggableLayer: View {
             }
     }
 
-    private func moved(_ base: RectN, by t: CGSize) -> RectN {
-        var r = base
-        r.x = min(max(0, base.x + Double(t.width / canvas.width)), 1 - base.w)
-        r.y = min(max(0, base.y + Double(t.height / canvas.height)), 1 - base.h)
+    private func moved(_ base: RectN, by t: CGSize, snap: Bool = false) -> RectN {
+        var x = min(max(0, base.x + Double(t.width / canvas.width)), 1 - base.w)
+        var y = min(max(0, base.y + Double(t.height / canvas.height)), 1 - base.h)
+        if snap {
+            x = snapEdge(x, size: base.w)
+            y = snapEdge(y, size: base.h)
+        }
+        var r = base; r.x = x; r.y = y
         return r
+    }
+
+    // Snaps either the leading or trailing edge to the nearest guide (0, 1/4, 1/3, 1/2,
+    // 2/3, 3/4, 1) if within 2.5% of canvas. Leading edge wins if both are close.
+    private func snapEdge(_ pos: Double, size: Double) -> Double {
+        let guides: [Double] = [0, 1/4, 1/3, 1/2, 2/3, 3/4, 1]
+        let threshold = 0.025
+        for g in guides {
+            if abs(pos - g) < threshold { return g }
+            if abs((pos + size) - g) < threshold { return g - size }
+        }
+        return pos
     }
 
     /// Resize. Default keeps the rect's w:h ratio (no distortion); `free` (Option held)

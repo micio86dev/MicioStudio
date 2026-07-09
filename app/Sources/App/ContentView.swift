@@ -63,6 +63,7 @@ struct ContentView: View {
     /// slider on the live canvas doesn't hammer the store on every tick).
     private func saveLive() {
         recorder.activeTemplateDoc = liveDoc
+        updateSnapshot()   // re-target display immediately if a screen layer's source changed
         saveTask?.cancel()
         let id = activeTemplateID
         let doc = liveDoc
@@ -122,12 +123,19 @@ struct ContentView: View {
     }
 
     /// Run the screen snapshot loop only while the live preview is active (not recording).
+    /// Prefers the display selected on the active scene's first Screen layer over the
+    /// globally selected display, so the preview re-renders when the user switches monitor
+    /// in the layer inspector without touching the global capture picker.
     private func updateSnapshot() {
-        if previewLive {
-            screenSnap.start(displayID: recorder.selectedDisplayID, windowID: recorder.selectedWindowID)
+        guard previewLive else { screenSnap.stop(); return }
+        let displayID: CGDirectDisplayID?
+        if let idStr = liveDoc?.activeScene?.layers.first(where: { $0.kind == .screen })?.deviceId,
+           let numID = CGDirectDisplayID(idStr) {
+            displayID = numID
         } else {
-            screenSnap.stop()
+            displayID = recorder.selectedDisplayID
         }
+        screenSnap.start(displayID: displayID, windowID: recorder.selectedWindowID)
     }
 
     private func openTimeline(_ url: URL) {
