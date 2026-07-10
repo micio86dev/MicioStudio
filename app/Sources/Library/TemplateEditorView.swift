@@ -163,8 +163,18 @@ struct TemplateEditorView: View {
             }
         }
         .frame(minWidth: 780, minHeight: 500)
-        .task { screenSnap.start(displayID: nil, windowID: nil) }
+        .task { screenSnap.start(displayID: screenLayerDisplayID(doc), windowID: nil) }
+        .onChange(of: doc) { _, newDoc in
+            screenSnap.start(displayID: screenLayerDisplayID(newDoc), windowID: nil)
+        }
         .onDisappear { screenSnap.stop() }
+    }
+
+    private func screenLayerDisplayID(_ doc: TemplateDoc) -> CGDirectDisplayID? {
+        guard let layers = doc.activeScene?.layers,
+              let deviceId = layers.first(where: { $0.kind == .screen })?.deviceId,
+              let numID = CGDirectDisplayID(deviceId) else { return nil }
+        return numID
     }
 
     private func save() {

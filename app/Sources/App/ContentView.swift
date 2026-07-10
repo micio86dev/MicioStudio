@@ -146,6 +146,7 @@ struct ContentView: View {
             let saved = UserDefaults.standard.string(forKey: "lastActiveTemplateID")
             if let saved, templates.templates.contains(where: { $0.id == saved }) {
                 activeTemplateID = saved
+                loadLive()
             }
             recordings.reload()
             updateSnapshot()
