@@ -70,3 +70,10 @@ targets:
       - path: ../scripts/build-core.sh
         name: "Build Rust core + UniFFI bindings"
         basedOnDependencyAnalysis: false
+    scheme:
+      # OS_ACTIVITY_MODE=disable silences most os_log/os_activity system chatter in the
+      # Xcode console (autoShortcut, CMIO analytics, HALC, etc.). Our own print() (stdout)
+      # is unaffected. MediaToolbox "<<< >>>" and emoji-VFX lines are printed directly and
+      # may still appear.
+      environmentVariables:
+        OS_ACTIVITY_MODE: disable
