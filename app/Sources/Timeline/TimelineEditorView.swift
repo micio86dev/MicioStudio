@@ -597,6 +597,8 @@ struct TimelineEditorView: View {
                     Task { @MainActor in exportProgress = p }
                 }
                 status = "Saved \(url.lastPathComponent)"
+                // Open Finder with the exported file selected so it's easy to find.
+                NSWorkspace.shared.activateFileViewerSelecting([url])
             } catch {
                 status = "Export failed: \(error.localizedDescription)"
             }

@@ -9,7 +9,9 @@ final class TemplateInstruction: NSObject, AVVideoCompositionInstructionProtocol
     let timeRange: CMTimeRange
     let enablePostProcessing = false
     let containsTweening = true
-    let requiredSourceTrackIDs: [NSValue]?
+    // Protocol-mandated type [NSValue]? isn't Sendable, but this is an immutable `let` of
+    // immutable NSNumbers set once in init — safe to share across the compositor's queues.
+    nonisolated(unsafe) let requiredSourceTrackIDs: [NSValue]?
     let passthroughTrackID = kCMPersistentTrackID_Invalid
 
     let template: TemplateDoc
