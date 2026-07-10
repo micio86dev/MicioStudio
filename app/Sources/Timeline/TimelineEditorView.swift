@@ -30,14 +30,43 @@ private struct Diamond: Shape {
 
 // MARK: - TimelineEditorView
 
+// Holds AVPlayer + its time observer so deinit guarantees cleanup regardless of
+// SwiftUI view lifecycle ordering (onDisappear is unreliable in NSHostingController windows).
+@MainActor
+private final class PlayerCoordinator: ObservableObject {
+    let player = AVPlayer()
+    // nonisolated(unsafe): accessed from deinit (nonisolated) and @Sendable AVPlayer callback,
+    // both of which run on the main thread in practice.
+    nonisolated(unsafe) private var timeObserver: Any?
+    nonisolated(unsafe) var onTick: ((Double) -> Void)?
+
+    func start() {
+        guard timeObserver == nil else { return }
+        timeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.05, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] t in
+            self?.onTick?(t.seconds)
+        }
+    }
+
+    func stop() {
+        if let o = timeObserver { player.removeTimeObserver(o); timeObserver = nil }
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+    }
+
+    deinit {
+        if let o = timeObserver { player.removeTimeObserver(o) }
+        player.pause()
+    }
+}
+
 struct TimelineEditorView: View {
     @ObservedObject var model: TimelineModel
-    // Presented as a standalone NSWindow (not a SwiftUI sheet) — close via AppKit directly.
-    private func closeWindow() { NSApp.keyWindow?.close() }
     @Environment(\.undoManager) private var undoManager
+    @StateObject private var coordinator = PlayerCoordinator()
 
-    @State private var player         = AVPlayer()
-    @State private var timeObserver: Any?
     @State private var isPlaying      = false
     @State private var isExporting    = false
     @State private var exportProgress = 0.0
@@ -46,7 +75,9 @@ struct TimelineEditorView: View {
     @State private var toast: String? = nil
     @State private var toastTask: Task<Void, Never>? = nil
     @State private var seekTask: Task<Void, Never>? = nil
-    @State private var undoTick       = 0   // incremented after each edit to refresh disabled state
+    @State private var undoTick       = 0
+
+    private var player: AVPlayer { coordinator.player }
 
     private enum DragOp {
         case seek
@@ -54,6 +85,11 @@ struct TimelineEditorView: View {
         case transitionBadge(clipIndex: Int)
     }
     @State private var dragOp: DragOp? = nil
+
+    private func closeWindow() {
+        coordinator.stop()
+        DispatchQueue.main.async { NSApp.keyWindow?.close() }
+    }
 
     // MARK: - Body
 
@@ -78,20 +114,16 @@ struct TimelineEditorView: View {
             Task { await generateFilmStrip() }
         }
         .onAppear {
-            timeObserver = player.addPeriodicTimeObserver(
-                forInterval: CMTime(seconds: 0.05, preferredTimescale: 600),
-                queue: .main
-            ) { t in
+            coordinator.onTick = { [weak model] t in
+                guard let model else { return }
                 Task { @MainActor in
                     if self.isPlaying {
-                        let tl = self.timelineTime(forPreviewTime: t.seconds)
-                        self.model.playhead = min(tl, self.model.totalDuration)
+                        let tl = self.timelineTime(forPreviewTime: t)
+                        model.playhead = min(tl, model.totalDuration)
                     }
                 }
             }
-        }
-        .onDisappear {
-            if let o = timeObserver { player.removeTimeObserver(o); timeObserver = nil }
+            coordinator.start()
         }
     }
 
