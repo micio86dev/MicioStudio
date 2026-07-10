@@ -1,5 +1,5 @@
 import SwiftUI
-import AVFoundation
+@preconcurrency import AVFoundation
 import AppKit
 
 /// Live preview of the selected webcam. Runs its own capture session, and STOPS while
@@ -58,15 +58,17 @@ struct WebcamPreview: NSViewRepresentable {
                 }
                 session.commitConfiguration()
             }
-            if active && !session.inputs.isEmpty {
-                if !session.isRunning { queue.async { self.session.startRunning() } }
-            } else if session.isRunning {
-                queue.async { self.session.stopRunning() }
+            let s = session
+            if active && !s.inputs.isEmpty {
+                if !s.isRunning { queue.async { s.startRunning() } }
+            } else if s.isRunning {
+                queue.async { s.stopRunning() }
             }
         }
 
         func teardown() {
-            queue.async { if self.session.isRunning { self.session.stopRunning() } }
+            let s = session
+            queue.async { if s.isRunning { s.stopRunning() } }
         }
     }
 }
