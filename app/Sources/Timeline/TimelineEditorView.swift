@@ -69,7 +69,7 @@ struct TimelineEditorView: View {
             Divider()
             exportRow.padding(.horizontal, 14).padding(.vertical, 10)
         }
-        .frame(minWidth: 900, minHeight: 740)
+        .frame(minWidth: 1200, minHeight: 900)
         .task { await rebuild(seekTo: 0) }
         .task { await generateFilmStrip() }
         .onChange(of: model.clips) { _, _ in
