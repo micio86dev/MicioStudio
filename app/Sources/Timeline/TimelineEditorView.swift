@@ -479,6 +479,7 @@ struct TimelineEditorView: View {
                     .foregroundStyle(.white)
                     .padding(.horizontal, 4).padding(.vertical, 2)
                     .background(Capsule().fill(Color.black.opacity(0.85)))
+                    .fixedSize()
                 Diamond().fill(Color.red).frame(width: 14, height: 10)
             }
         }
