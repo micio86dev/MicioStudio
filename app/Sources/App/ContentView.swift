@@ -52,6 +52,7 @@ struct ContentView: View {
     @State private var transition = "fade"   // scene-switch transition: cut | fade | slide | swipe
     @State private var showTimeline = false
     @State private var timelineModel: TimelineModel?
+    @State private var timelineWindow: NSWindow?   // strong ref so ARC — not close() — owns its lifetime
     @State private var showPermissions = false
     @State private var saveTask: Task<Void, Never>?
     @State private var layerPanelHeight: CGFloat = 220
@@ -195,11 +196,15 @@ struct ContentView: View {
             styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
             defer: false)
+        // Default is true: close() releases the window, but NSHostingController/ARC also release it
+        // during teardown → double free → EXC_BAD_ACCESS in objc_release. Let ARC own it instead.
+        window.isReleasedWhenClosed = false
         window.title = "Timeline Editor"
         window.contentViewController = NSHostingController(rootView: TimelineEditorView(model: model))
         window.setFrame(screen, display: true)
         window.center()
         window.makeKeyAndOrderFront(nil)
+        timelineWindow = window   // replaces (and releases) any previous editor window
     }
 
     private func openTimeline(_ url: URL) {
