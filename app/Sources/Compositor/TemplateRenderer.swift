@@ -38,17 +38,20 @@ enum TemplateRenderer {
             case .background:
                 result = background(layer, screen: screenCI, canvas: canvas).composited(over: result)
             case .screen:
-                guard let img = screenCI ?? placeholder(.systemBlue, outputSize), let r = layer.rect else { continue }
+                // No frame yet (capture warmup) → skip the layer so the background shows
+                // through, instead of a jarring solid placeholder in the recorded video.
+                guard let img = screenCI, let r = layer.rect else { continue }
                 result = framed(img, rect: r, cornerRadius: layer.cornerRadius ?? 0,
                                 shadow: layer.shadow, mirror: false, fit: layer.fit, canvas: outputSize).composited(over: result)
             case .camera:
-                var img = cameraIndex < cameras.count ? cameras[cameraIndex]
-                                                      : (placeholder(.systemGreen, outputSize) ?? screenCI ?? CIImage.empty())
+                let idx = cameraIndex
                 cameraIndex += 1
+                // No frame for this camera yet → skip; show whatever is behind it.
+                guard idx < cameras.count, let r = layer.rect else { continue }
+                var img = cameras[idx]
                 if let mode = layer.bgMode, mode != "none" {
                     img = virtualBackground(img, mode: mode, imagePath: layer.bgImage) ?? img
                 }
-                guard let r = layer.rect else { continue }
                 result = framed(img, rect: r, cornerRadius: layer.cornerRadius ?? 0,
                                 shadow: layer.shadow, mirror: layer.mirror ?? false, fit: layer.fit, canvas: outputSize).composited(over: result)
             case .image:
@@ -196,12 +199,6 @@ enum TemplateRenderer {
         f.radius = Float(min(radius, min(rect.width, rect.height) / 2))
         f.color = CIColor.white
         return f.outputImage ?? CIImage(color: .white).cropped(to: rect)
-    }
-
-    private static func placeholder(_ ns: NSColor, _ size: CGSize) -> CIImage? {
-        let c = ns.usingColorSpace(.deviceRGB) ?? .gray
-        return CIImage(color: CIColor(red: c.redComponent, green: c.greenComponent, blue: c.blueComponent))
-            .cropped(to: CGRect(origin: .zero, size: size))
     }
 
     private static func ciColor(_ hex: String) -> CIColor {
