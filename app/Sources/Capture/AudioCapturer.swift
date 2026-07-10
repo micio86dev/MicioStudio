@@ -48,8 +48,12 @@ final class AudioCapturer: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
             url: outputDir.appendingPathComponent("mic.caf"),
             fileType: .caf, mediaType: .audio,
             outputSettings: SegmentWriter.pcmAudio48k(channels: 1))
-        // The mic clock is the audio device clock; anchor via the empirical host mapping.
-        writer.setHostOrigin(clock.t0Host)
+        // AVCaptureSession timestamps samples on its masterClock, which is the host time clock —
+        // the same clock ScreenCaptureKit and t0Host use. So the mic PTS are directly comparable:
+        // anchor at t0Host like the screen/system tracks. (The old empirical host mapping derived
+        // the anchor from the first buffer's DELIVERY time, injecting audio-buffer latency as a
+        // fixed A/V offset → the "slightly out of sync" audio.)
+        writer.setSessionStart(clock.t0Host)
 
         super.init()
         output.setSampleBufferDelegate(self, queue: queue)
