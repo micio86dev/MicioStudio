@@ -222,6 +222,8 @@ struct CanvasView: View {
     var live = false
     var screenImage: NSImage?
     var defaultCameraID: String?
+    /// Set to false during recording so WebcamPreview stops competing with the recorder for device access.
+    var cameraActive: Bool = true
 
     var body: some View {
         GeometryReader { geo in
@@ -240,6 +242,7 @@ struct CanvasView: View {
                             live: live,
                             screenImage: screenImage,
                             defaultCameraID: defaultCameraID,
+                            cameraActive: cameraActive,
                             onSelect: { selection = layer.id },
                             onChange: { newRect in
                                 if let i = doc.layers.firstIndex(where: { $0.id == layer.id }) {
@@ -289,6 +292,7 @@ private struct DraggableLayer: View {
     var live: Bool = false
     var screenImage: NSImage?
     var defaultCameraID: String?
+    var cameraActive: Bool = true
     let onSelect: () -> Void
     let onChange: (RectN) -> Void
 
@@ -347,7 +351,7 @@ private struct DraggableLayer: View {
             let contain = layer.fit == "contain"
             switch layer.kind {
             case .camera:
-                WebcamPreview(deviceID: layer.deviceId ?? defaultCameraID, active: true)
+                WebcamPreview(deviceID: layer.deviceId ?? defaultCameraID, active: cameraActive)
                     .scaleEffect(x: layer.mirror == true ? -1 : 1)
             case .screen:
                 if let img = screenImage {

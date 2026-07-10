@@ -241,8 +241,9 @@ struct ContentView: View {
                 .onChange(of: liveDoc?.activeSceneIndex) { _, idx in
                     if let idx, recorder.isRecording { recorder.recordSceneSwitch(to: idx, transition: transition) }
                 }
-                CanvasView(doc: liveBinding, selection: $liveSelection, live: previewLive,
-                           screenImage: screenSnap.image, defaultCameraID: recorder.selectedCameraDeviceID)
+                CanvasView(doc: liveBinding, selection: $liveSelection, live: true,
+                           screenImage: screenSnap.image, defaultCameraID: recorder.selectedCameraDeviceID,
+                           cameraActive: previewLive)
                     .background(Color.black)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(.secondary.opacity(0.3)))
