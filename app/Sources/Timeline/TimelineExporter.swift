@@ -112,31 +112,44 @@ enum TimelineExporter {
         guard renderSize.width > 0 && renderSize.height > 0 else { throw ExportError.noVideoTrack }
 
         let composition = AVMutableComposition()
-        // Two alternating video + audio tracks so transition overlaps don't collide.
+        // Two alternating video tracks so transition overlaps render on separate tracks.
+        // Single audio track: audio for clip i starts after its incoming transition ends,
+        // so clips never overlap in the audio timeline → no doubling or desync.
         guard let vt1 = composition.addMutableTrack(withMediaType: .video, preferredTrackID: 1),
               let vt2 = composition.addMutableTrack(withMediaType: .video, preferredTrackID: 2) else {
             throw ExportError.noVideoTrack
         }
         let vTracks = [vt1, vt2]
-        let at1 = srcAudio == nil ? nil : composition.addMutableTrack(withMediaType: .audio, preferredTrackID: 3)
-        let at2 = srcAudio == nil ? nil : composition.addMutableTrack(withMediaType: .audio, preferredTrackID: 4)
-        let aTracks: [AVMutableCompositionTrack] = [at1, at2].compactMap { $0 }
+        let audioTrack = srcAudio == nil ? nil
+            : composition.addMutableTrack(withMediaType: .audio, preferredTrackID: 3)
 
-        let scale: CMTimeScale = 600
+        let scale: CMTimeScale = 48_000   // exact for 48kHz audio and 30fps video
         var layout: [ClipLayout] = []
         let clips = model.clips
         for i in clips.indices {
             let c = clips[i]
-            let track = vTracks[i % 2]
-            let at = CMTime(seconds: model.start(of: i), preferredTimescale: scale)
-            let range = CMTimeRange(start: CMTime(seconds: c.sourceStart, preferredTimescale: scale),
-                                    duration: CMTime(seconds: c.duration, preferredTimescale: scale))
-            try track.insertTimeRange(range, of: srcVideo, at: at)
-            if let srcAudio, !aTracks.isEmpty {
-                try? aTracks[i % 2].insertTimeRange(range, of: srcAudio, at: at)
+            let overlapBefore = model.overlap(before: i)
+            let compStart = CMTime(seconds: model.start(of: i), preferredTimescale: scale)
+            let videoRange = CMTimeRange(start: CMTime(seconds: c.sourceStart, preferredTimescale: scale),
+                                        duration: CMTime(seconds: c.duration, preferredTimescale: scale))
+            try vTracks[i % 2].insertTimeRange(videoRange, of: srcVideo, at: compStart)
+
+            // Audio: skip the incoming transition period so clips are non-overlapping.
+            // overlapBefore == 0 for cuts → audio is gapless.
+            if let srcAudio, let at = audioTrack {
+                let audioSrcStart = c.sourceStart + overlapBefore
+                let audioDuration = c.duration - overlapBefore
+                if audioDuration > 0 {
+                    let audioCompStart = CMTime(seconds: model.start(of: i) + overlapBefore, preferredTimescale: scale)
+                    let audioRange = CMTimeRange(
+                        start: CMTime(seconds: audioSrcStart, preferredTimescale: scale),
+                        duration: CMTime(seconds: audioDuration, preferredTimescale: scale))
+                    try? at.insertTimeRange(audioRange, of: srcAudio, at: audioCompStart)
+                }
             }
+
             layout.append(ClipLayout(start: model.start(of: i), duration: c.duration,
-                                     trackID: track.trackID, transition: c.transitionIn,
+                                     trackID: vTracks[i % 2].trackID, transition: c.transitionIn,
                                      overlap: model.overlap(before: i)))
         }
 
@@ -168,7 +181,7 @@ enum TimelineExporter {
         }
         let at = srcAudio == nil ? nil
             : composition.addMutableTrack(withMediaType: .audio, preferredTrackID: 2)
-        let scale: CMTimeScale = 600
+        let scale: CMTimeScale = 48_000
         var cursor = CMTime.zero
         for clip in model.clips {
             let range = CMTimeRange(
