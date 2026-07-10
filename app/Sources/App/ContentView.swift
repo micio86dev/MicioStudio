@@ -6,7 +6,37 @@ extension Array {
     subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
 }
 
+// Intercepts F1–F9 via a local NSEvent monitor (SwiftUI .keyboardShortcut can't reliably
+// capture function keys before the system handles them). @MainActor because NSEvent local
+// monitors fire on the main thread; @Published drives .onReceive in ContentView.
+@MainActor
+private final class FKeyMediator: ObservableObject {
+    @Published var pressedIndex: Int? = nil
+    nonisolated(unsafe) private var monitor: Any?
+    private static let fKeys: [Character] = [
+        "\u{F704}", "\u{F705}", "\u{F706}", "\u{F707}", "\u{F708}",
+        "\u{F709}", "\u{F70A}", "\u{F70B}", "\u{F70C}"
+    ]
+
+    func start() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self,
+                  let chars = event.charactersIgnoringModifiers,
+                  let ch = chars.first,
+                  let idx = Self.fKeys.firstIndex(of: ch) else { return event }
+            self.pressedIndex = idx
+            return nil
+        }
+    }
+
+    deinit {
+        if let m = monitor { NSEvent.removeMonitor(m) }
+    }
+}
+
 struct ContentView: View {
+    @StateObject private var fKeyMediator = FKeyMediator()
     @StateObject private var recorder = RecordingCoordinator()
     @StateObject private var perms = PermissionManager()
     @StateObject private var templates = TemplateStore()
@@ -119,6 +149,7 @@ struct ContentView: View {
             }
             recordings.reload()
             updateSnapshot()
+            fKeyMediator.start()
         }
         .onChange(of: recorder.combinedURL) { _, url in
             recordings.reload()
@@ -129,6 +160,13 @@ struct ContentView: View {
         .onChange(of: recorder.selectedWindowID) { _, _ in updateSnapshot() }
         .sheet(isPresented: $showTimeline) {
             if let model = timelineModel { TimelineEditorView(model: model) }
+        }
+        .onReceive(fKeyMediator.$pressedIndex) { idx in
+            guard let idx, var d = liveDoc, d.scenes.indices.contains(idx) else { return }
+            d.activeSceneIndex = idx
+            liveDoc = d
+            saveLive()
+            fKeyMediator.pressedIndex = nil
         }
     }
 
