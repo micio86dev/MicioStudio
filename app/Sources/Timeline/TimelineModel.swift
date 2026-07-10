@@ -97,11 +97,11 @@ final class TimelineModel: ObservableObject {
         guard let (i, offset) = clipIndex(atTimelineTime: playhead),
               offset > 0.01, offset < clips[i].duration - 0.01 else { return false }
         let before = takeSnapshot()
-        var left = clips[i], right = clips[i]
+        var left = clips[i]
         left.duration = offset
-        right.sourceStart = clips[i].sourceStart + offset
-        right.duration = clips[i].duration - offset
-        right.transitionIn = "cut"
+        let right = Clip(sourceStart: clips[i].sourceStart + offset,
+                         duration: clips[i].duration - offset,
+                         transitionIn: "cut")
         clips.replaceSubrange(i...i, with: [left, right])
         selection = right.id
         registerChange(before: before, after: takeSnapshot(), undoManager: undoManager, name: "Split Clip")
