@@ -56,6 +56,16 @@ targets:
         OTHER_SWIFT_FLAGS:
           - -Xcc
           - -fmodule-map-file=$(SRCROOT)/Generated/MicioCoreFFI.modulemap
+      configs:
+        # Debug-only: -interposable lets InjectionIII hot-reload methods of structs and
+        # final classes (i.e. all SwiftUI views). Overrides base OTHER_LDFLAGS for Debug;
+        # Release keeps the base flags (no interposable).
+        Debug:
+          OTHER_LDFLAGS:
+            - -force_load
+            - $(SRCROOT)/../core/target/release/libmicio_core.a
+            - -Xlinker
+            - -interposable
     preBuildScripts:
       - path: ../scripts/build-core.sh
         name: "Build Rust core + UniFFI bindings"
