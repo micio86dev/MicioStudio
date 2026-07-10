@@ -32,7 +32,8 @@ private struct Diamond: Shape {
 
 struct TimelineEditorView: View {
     @ObservedObject var model: TimelineModel
-    @Environment(\.dismiss) private var dismiss
+    // Presented as a standalone NSWindow (not a SwiftUI sheet) — close via AppKit directly.
+    private func closeWindow() { NSApp.keyWindow?.close() }
     @Environment(\.undoManager) private var undoManager
 
     @State private var player         = AVPlayer()
@@ -499,7 +500,7 @@ struct TimelineEditorView: View {
                 Text(status).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Done") { dismiss() }
+            Button("Done") { closeWindow() }
             Button("Export edited.mov") { exportVideo() }
                 .buttonStyle(.borderedProminent)
                 .disabled(isExporting)
