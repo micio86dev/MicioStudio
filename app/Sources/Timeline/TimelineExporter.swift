@@ -16,7 +16,9 @@ final class TimelineInstruction: NSObject, AVVideoCompositionInstructionProtocol
     let timeRange: CMTimeRange
     let enablePostProcessing = false
     let containsTweening = true
-    let requiredSourceTrackIDs: [NSValue]?
+    // Protocol-mandated [NSValue]? isn't Sendable, but it's an immutable `let` of immutable
+    // NSNumbers set once in init — safe to share across the compositor's queues.
+    nonisolated(unsafe) let requiredSourceTrackIDs: [NSValue]?
     let passthroughTrackID = kCMPersistentTrackID_Invalid
     let layout: [ClipLayout]
     let renderSize: CGSize
@@ -53,9 +55,11 @@ final class TimelineCompositor: NSObject, AVVideoCompositing {
     nonisolated(unsafe) private var renderContext: AVVideoCompositionRenderContext?
     private let queue = DispatchQueue(label: "dev.miciodev.timeline")
 
-    var sourcePixelBufferAttributes: [String: any Sendable]? = [
+    // Protocol requires only { get }; these never change, so `let` avoids the mutable-stored-
+    // property warning on this Sendable-conforming class.
+    let sourcePixelBufferAttributes: [String: any Sendable]? = [
         kCVPixelBufferPixelFormatTypeKey as String: [kCVPixelFormatType_32BGRA]]
-    var requiredPixelBufferAttributesForRenderContext: [String: any Sendable] = [
+    let requiredPixelBufferAttributesForRenderContext: [String: any Sendable] = [
         kCVPixelBufferPixelFormatTypeKey as String: [kCVPixelFormatType_32BGRA]]
 
     func renderContextChanged(_ newRenderContext: AVVideoCompositionRenderContext) {
