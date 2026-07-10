@@ -243,7 +243,7 @@ struct ContentView: View {
                 }
                 CanvasView(doc: liveBinding, selection: $liveSelection, live: true,
                            screenImage: screenSnap.image, defaultCameraID: recorder.selectedCameraDeviceID,
-                           cameraActive: previewLive)
+                           cameraActive: true)
                     .background(Color.black)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(.secondary.opacity(0.3)))
