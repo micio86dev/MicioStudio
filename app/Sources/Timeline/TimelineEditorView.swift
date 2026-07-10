@@ -41,12 +41,13 @@ private final class PlayerCoordinator: ObservableObject {
 
     func start(model: TimelineModel) {
         guard timeObserver == nil else { return }
+        // Delivered on the main queue → safe to update MainActor state synchronously.
+        // With zero display overlap, preview time == timeline time, so t.seconds IS the playhead.
         timeObserver = player.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 0.05, preferredTimescale: 600),
+            forInterval: CMTime(seconds: 0.033, preferredTimescale: 600),
             queue: .main
         ) { [weak self, weak model] t in
-            guard let self, self.isPlaying, let model else { return }
-            Task { @MainActor [weak self, weak model] in
+            MainActor.assumeIsolated {
                 guard let self, self.isPlaying, let model else { return }
                 model.playhead = min(t.seconds, model.totalDuration)
             }
