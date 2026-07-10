@@ -159,8 +159,9 @@ struct ContentView: View {
         .onChange(of: previewLive) { _, _ in updateSnapshot() }
         .onChange(of: recorder.selectedDisplayID) { _, _ in updateSnapshot() }
         .onChange(of: recorder.selectedWindowID) { _, _ in updateSnapshot() }
-        .sheet(isPresented: $showTimeline) {
-            if let model = timelineModel { TimelineEditorView(model: model) }
+        .onChange(of: showTimeline) { _, open in
+            if open, let model = timelineModel { openTimelineWindow(model) }
+            showTimeline = false
         }
         .onReceive(fKeyMediator.$pressedIndex) { idx in
             guard let idx, var d = liveDoc, d.scenes.indices.contains(idx) else { return }
@@ -185,6 +186,20 @@ struct ContentView: View {
             displayID = recorder.selectedDisplayID
         }
         screenSnap.start(displayID: displayID, windowID: recorder.selectedWindowID)
+    }
+
+    private func openTimelineWindow(_ model: TimelineModel) {
+        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1400, height: 900)
+        let window = NSWindow(
+            contentRect: screen,
+            styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false)
+        window.title = "Timeline Editor"
+        window.contentViewController = NSHostingController(rootView: TimelineEditorView(model: model))
+        window.setFrame(screen, display: true)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
     }
 
     private func openTimeline(_ url: URL) {
