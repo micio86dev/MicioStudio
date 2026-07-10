@@ -56,16 +56,10 @@ targets:
         OTHER_SWIFT_FLAGS:
           - -Xcc
           - -fmodule-map-file=$(SRCROOT)/Generated/MicioCoreFFI.modulemap
-      configs:
-        # Debug-only: -interposable lets InjectionIII hot-reload methods of structs and
-        # final classes (i.e. all SwiftUI views). Overrides base OTHER_LDFLAGS for Debug;
-        # Release keeps the base flags (no interposable).
-        Debug:
-          OTHER_LDFLAGS:
-            - -force_load
-            - $(SRCROOT)/../core/target/release/libmicio_core.a
-            - -Xlinker
-            - -interposable
+    # NOTE: InjectionIII asks for `-Xlinker -interposable` to hot-reload struct/final-class
+    # methods, but it is INCOMPATIBLE with the force-loaded Rust static lib: it turns the
+    # lib's internal symbols (serde/std) into dynamic lookups that fail at load
+    # (dyld "Symbol not found ... serde_core..de..Expected::fmt" → SIGABRT). Do not add it.
     preBuildScripts:
       - path: ../scripts/build-core.sh
         name: "Build Rust core + UniFFI bindings"
