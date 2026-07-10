@@ -437,7 +437,7 @@ struct TimelineEditorView: View {
         let w        = max(clip.duration * pps, 24)
         let selected = model.selection == clip.id
         let frames   = filmFrames[clip.id] ?? []
-        let nFrames  = max(1, Int(w / 50))
+        let nFrames  = max(1, Int(ceil(w / 40.0)))
 
         return ZStack(alignment: .topLeading) {
             HStack(spacing: 0) {
@@ -480,24 +480,24 @@ struct TimelineEditorView: View {
 
     @ViewBuilder
     private func trimHandles(selected: Bool) -> some View {
-        let opacity: Double = selected ? 0.92 : 0.28
-        let width:   CGFloat = selected ? 12 : 8
-        HStack {
-            VStack {
-                Rectangle()
-                    .fill(Color.white.opacity(opacity))
-                    .frame(width: width, height: 36)
-                    .cornerRadius(3)
+        if selected {
+            HStack {
+                VStack {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.92))
+                        .frame(width: 12, height: 36)
+                        .cornerRadius(3)
+                }
+                .frame(maxHeight: .infinity)
+                Spacer()
+                VStack {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.92))
+                        .frame(width: 12, height: 36)
+                        .cornerRadius(3)
+                }
+                .frame(maxHeight: .infinity)
             }
-            .frame(maxHeight: .infinity)
-            Spacer()
-            VStack {
-                Rectangle()
-                    .fill(Color.white.opacity(opacity))
-                    .frame(width: width, height: 36)
-                    .cornerRadius(3)
-            }
-            .frame(maxHeight: .infinity)
         }
     }
 
