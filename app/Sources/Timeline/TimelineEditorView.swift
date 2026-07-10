@@ -36,33 +36,60 @@ private struct Diamond: Shape {
 private final class PlayerCoordinator: ObservableObject {
     let player = AVPlayer()
     @Published var isPlaying = false
-    // nonisolated(unsafe): accessed from nonisolated deinit and @Sendable AVPlayer callback.
-    nonisolated(unsafe) private var timeObserver: Any?
+    private weak var model: TimelineModel?
+    // A main-runloop timer in .common mode drives the playhead. It keeps firing during scroll/
+    // tracking and sidesteps AVPlayer periodic-observer quirks under NSHostingController.
+    // nonisolated(unsafe): invalidated from the nonisolated deinit backstop; primary teardown
+    // runs on the main thread.
+    nonisolated(unsafe) private var ticker: Timer?
+    nonisolated(unsafe) private var statusObs: NSKeyValueObservation?
 
-    func start(model: TimelineModel) {
-        guard timeObserver == nil else { return }
-        // Delivered on the main queue → safe to update MainActor state synchronously.
-        // With zero display overlap, preview time == timeline time, so t.seconds IS the playhead.
-        timeObserver = player.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 0.033, preferredTimescale: 600),
-            queue: .main
-        ) { [weak self, weak model] t in
-            MainActor.assumeIsolated {
-                guard let self, self.isPlaying, let model else { return }
-                model.playhead = min(t.seconds, model.totalDuration)
+    // Mirror the player's REAL play state. AVPlayerView can start/stop playback itself (e.g. it
+    // eats the spacebar), bypassing toggle() — KVO on timeControlStatus keeps isPlaying and the
+    // ticker in sync no matter how playback started.
+    func bind(_ model: TimelineModel) {
+        self.model = model
+        guard statusObs == nil else { return }
+        statusObs = player.observe(\.timeControlStatus, options: [.new]) { [weak self] p, _ in
+            let playing = p.timeControlStatus == .playing
+            Task { @MainActor in
+                guard let self else { return }
+                self.isPlaying = playing
+                playing ? self.startTicker() : self.stopTicker()
             }
         }
     }
 
+    func toggle() {
+        player.timeControlStatus == .playing ? player.pause() : player.play()
+    }
+
+    func pause() { player.pause() }   // KVO stops the ticker
+
+    private func startTicker() {
+        stopTicker()
+        let t = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let model = self.model else { return }
+                model.playhead = min(self.player.currentTime().seconds, model.totalDuration)
+            }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        ticker = t
+    }
+
+    private func stopTicker() { ticker?.invalidate(); ticker = nil }
+
     func stop() {
-        if let o = timeObserver { player.removeTimeObserver(o); timeObserver = nil }
-        isPlaying = false
+        statusObs?.invalidate(); statusObs = nil
+        stopTicker()
         player.pause()
         player.replaceCurrentItem(with: nil)
     }
 
     deinit {
-        if let o = timeObserver { player.removeTimeObserver(o) }
+        statusObs?.invalidate()
+        ticker?.invalidate()
         player.pause()
     }
 }
@@ -118,7 +145,7 @@ struct TimelineEditorView: View {
             Task { await generateFilmStrip() }
         }
         .onAppear {
-            coordinator.start(model: model)
+            coordinator.bind(model)
         }
     }
 
@@ -293,7 +320,7 @@ struct TimelineEditorView: View {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { v in
                 if dragOp == nil {
-                    if coordinator.isPlaying { player.pause(); coordinator.isPlaying = false }
+                    coordinator.pause()
                     dragOp = resolveIntent(at: v.location, pps: pps)
                 }
                 applyDrag(v.location, pps: pps)
@@ -537,12 +564,11 @@ struct TimelineEditorView: View {
     // MARK: - Playback
 
     private func togglePlay() {
-        coordinator.isPlaying ? player.pause() : player.play()
-        coordinator.isPlaying.toggle()
+        coordinator.toggle()
     }
 
     private func seekTo(_ timelineTime: Double) {
-        if coordinator.isPlaying { player.pause(); coordinator.isPlaying = false }
+        coordinator.pause()
         model.playhead = timelineTime
         Task { await exactSeek(previewTime(forTimelineTime: timelineTime)) }
     }
