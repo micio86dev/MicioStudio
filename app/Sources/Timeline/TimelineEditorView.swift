@@ -223,7 +223,7 @@ struct TimelineEditorView: View {
 
         return ScrollView(.horizontal, showsIndicators: true) {
             ZStack(alignment: .topLeading) {
-                VStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 0) {
                     rulerView(pps: pps).frame(height: 24)
                     clipsLayer(pps: pps).frame(height: 108)
                 }
@@ -389,7 +389,9 @@ struct TimelineEditorView: View {
     // MARK: - Clips Layer
 
     private func clipsLayer(pps: Double) -> some View {
-        ZStack(alignment: .topLeading) {
+        let w = (model.totalDuration + 4) * pps + 32
+        return ZStack(alignment: .topLeading) {
+            Color.clear.frame(width: w, height: 100)
             ForEach(model.clips.indices, id: \.self) { i in
                 clipView(index: i, pps: pps)
                     .offset(x: model.start(of: i) * pps + 16)
