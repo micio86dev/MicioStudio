@@ -151,6 +151,38 @@ enum TimelineExporter {
         return (composition, videoComposition)
     }
 
+    /// Single-track composition for live preview — no custom compositor, no requiredSourceTrackIDs
+    /// conflicts. Clips are simply concatenated; seeking uses previewTime(for:) to convert from
+    /// the model's timeline time (which accounts for transition overlaps) to this flat timeline.
+    @MainActor
+    static func buildPreview(_ model: TimelineModel) async throws -> AVComposition {
+        let asset = AVURLAsset(url: model.sourceURL)
+        guard let srcVideo = try await asset.loadTracks(withMediaType: .video).first else {
+            throw ExportError.noVideoTrack
+        }
+        let srcAudio = try await asset.loadTracks(withMediaType: .audio).first
+        let composition = AVMutableComposition()
+        guard let vt = composition.addMutableTrack(withMediaType: .video,
+                                                    preferredTrackID: 1) else {
+            throw ExportError.noVideoTrack
+        }
+        let at = srcAudio == nil ? nil
+            : composition.addMutableTrack(withMediaType: .audio, preferredTrackID: 2)
+        let scale: CMTimeScale = 600
+        var cursor = CMTime.zero
+        for clip in model.clips {
+            let range = CMTimeRange(
+                start:    CMTime(seconds: clip.sourceStart, preferredTimescale: scale),
+                duration: CMTime(seconds: clip.duration,    preferredTimescale: scale))
+            try vt.insertTimeRange(range, of: srcVideo, at: cursor)
+            if let srcAudio, let at {
+                try? at.insertTimeRange(range, of: srcAudio, at: cursor)
+            }
+            cursor = CMTimeAdd(cursor, range.duration)
+        }
+        return composition
+    }
+
     @MainActor
     static func export(_ model: TimelineModel, to out: URL,
                        onProgress: @escaping @Sendable (Double) -> Void) async throws -> URL {

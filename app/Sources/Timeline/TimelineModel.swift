@@ -1,30 +1,24 @@
 import AVFoundation
 import Combine
 
-/// One clip on the timeline: a range of the source video, plus the transition used to
-/// enter it from the previous clip.
 struct Clip: Identifiable, Equatable {
     let id = UUID()
-    var sourceStart: Double        // seconds into the source
-    var duration: Double           // seconds shown
-    var transitionIn: String       // cut | fade | slide | swipe (from the previous clip)
+    var sourceStart: Double
+    var duration: Double
+    var transitionIn: String  // cut | fade | slide | swipe
 
     var sourceEnd: Double { sourceStart + duration }
 }
 
-/// Editable timeline over a single source video: split / trim / delete / reorder clips
-/// and choose transitions between them. Pure time math (no AVFoundation objects held),
-/// so it drives both the preview and the export.
 @MainActor
 final class TimelineModel: ObservableObject {
     let sourceURL: URL
     let sourceDuration: Double
 
     @Published var clips: [Clip]
-    @Published var playhead: Double = 0            // seconds on the timeline
-    @Published var pixelsPerSecond: Double = 80    // zoom
+    @Published var playhead: Double = 0
+    @Published var pixelsPerSecond: Double = 80
     @Published var selection: UUID?
-    /// Overlap length of non-cut transitions, in seconds.
     @Published var transitionDuration: Double = 0.5
 
     init(sourceURL: URL, sourceDuration: Double) {
@@ -33,15 +27,13 @@ final class TimelineModel: ObservableObject {
         self.clips = [Clip(sourceStart: 0, duration: sourceDuration, transitionIn: "cut")]
     }
 
-    // MARK: - Layout (timeline time)
+    // MARK: - Layout
 
-    /// Overlap applied entering clip `index` (0 for the first clip / cut).
     func overlap(before index: Int) -> Double {
         guard index > 0, clips.indices.contains(index), clips[index].transitionIn != "cut" else { return 0 }
         return min(transitionDuration, min(clips[index - 1].duration, clips[index].duration) / 2)
     }
 
-    /// Timeline start time of clip `index`.
     func start(of index: Int) -> Double {
         var t = 0.0
         for i in 0..<index {
@@ -57,7 +49,6 @@ final class TimelineModel: ObservableObject {
         return start(of: last) + clips[last].duration
     }
 
-    /// The clip visible at `timelineTime` and the offset into it.
     func clipIndex(atTimelineTime time: Double) -> (index: Int, offset: Double)? {
         for i in clips.indices {
             let s = start(of: i)
@@ -68,18 +59,44 @@ final class TimelineModel: ObservableObject {
         return clips.isEmpty ? nil : (clips.count - 1, clips[clips.count - 1].duration)
     }
 
-    /// Source time (for the preview) at a timeline time.
     func sourceTime(atTimelineTime time: Double) -> Double? {
         guard let (i, offset) = clipIndex(atTimelineTime: time) else { return nil }
         return clips[i].sourceStart + offset
     }
 
+    // MARK: - Undo / Redo
+
+    struct EditSnapshot {
+        var clips: [Clip]
+        var selection: UUID?
+        var playhead: Double
+    }
+
+    func takeSnapshot() -> EditSnapshot {
+        EditSnapshot(clips: clips, selection: selection, playhead: playhead)
+    }
+
+    func applySnapshot(_ snap: EditSnapshot) {
+        clips = snap.clips
+        selection = snap.selection
+        playhead = snap.playhead
+    }
+
+    func registerChange(before: EditSnapshot, after: EditSnapshot, undoManager: UndoManager?, name: String) {
+        undoManager?.registerUndo(withTarget: self) { target in
+            target.applySnapshot(before)
+            target.registerChange(before: after, after: before, undoManager: undoManager, name: name)
+        }
+        undoManager?.setActionName(name)
+    }
+
     // MARK: - Edits
 
-    /// Split the clip under the playhead into two clips at that point.
-    func splitAtPlayhead() {
-        guard let (i, offset) = clipIndex(atTimelineTime: playhead), offset > 0.05,
-              offset < clips[i].duration - 0.05 else { return }
+    @discardableResult
+    func splitAtPlayhead(undoManager: UndoManager? = nil) -> Bool {
+        guard let (i, offset) = clipIndex(atTimelineTime: playhead),
+              offset > 0.01, offset < clips[i].duration - 0.01 else { return false }
+        let before = takeSnapshot()
         var left = clips[i], right = clips[i]
         left.duration = offset
         right.sourceStart = clips[i].sourceStart + offset
@@ -87,17 +104,21 @@ final class TimelineModel: ObservableObject {
         right.transitionIn = "cut"
         clips.replaceSubrange(i...i, with: [left, right])
         selection = right.id
+        registerChange(before: before, after: takeSnapshot(), undoManager: undoManager, name: "Split Clip")
+        return true
     }
 
-    func delete(_ id: UUID) {
+    func delete(_ id: UUID, undoManager: UndoManager? = nil) {
         guard clips.count > 1 else { return }
+        let before = takeSnapshot()
         clips.removeAll { $0.id == id }
-        if selection == id { selection = nil }
+        if selection == id { selection = clips.first?.id }
         playhead = min(playhead, totalDuration)
+        registerChange(before: before, after: takeSnapshot(), undoManager: undoManager, name: "Delete Clip")
     }
 
-    /// Trim a clip edge. `edge` = .start moves the in-point; .end moves the out-point.
     enum Edge { case start, end }
+
     func trim(_ id: UUID, edge: Edge, bySeconds delta: Double) {
         guard let i = clips.firstIndex(where: { $0.id == id }) else { return }
         var c = clips[i]
@@ -114,9 +135,24 @@ final class TimelineModel: ObservableObject {
         clips[i] = c
     }
 
-    func setTransition(_ id: UUID, _ kind: String) {
+    func commitTrimUndo(before: EditSnapshot, undoManager: UndoManager?) {
+        registerChange(before: before, after: takeSnapshot(), undoManager: undoManager, name: "Trim Clip")
+    }
+
+    func setTransition(_ id: UUID, _ kind: String, undoManager: UndoManager? = nil) {
         guard let i = clips.firstIndex(where: { $0.id == id }) else { return }
+        let before = takeSnapshot()
         clips[i].transitionIn = kind
+        registerChange(before: before, after: takeSnapshot(), undoManager: undoManager, name: "Change Transition")
+    }
+
+    func cycleTransition(_ id: UUID, undoManager: UndoManager? = nil) {
+        guard let i = clips.firstIndex(where: { $0.id == id }) else { return }
+        let kinds = ["cut", "fade", "slide", "swipe"]
+        let current = clips[i].transitionIn
+        let currentIndex = kinds.firstIndex(of: current) ?? 0
+        let next = kinds[(currentIndex + 1) % kinds.count]
+        setTransition(id, next, undoManager: undoManager)
     }
 
     func move(from source: IndexSet, to destination: Int) {

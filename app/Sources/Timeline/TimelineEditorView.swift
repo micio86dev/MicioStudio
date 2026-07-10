@@ -4,18 +4,27 @@ import AppKit
 
 // MARK: - PlayerView
 
-/// Direct NSViewRepresentable wrapper — avoids a SwiftUI/AVKit getSuperclassMetadata
-/// fatal error triggered by VideoPlayer on macOS 26 when presented inside a sheet.
 private struct PlayerView: NSViewRepresentable {
     let player: AVPlayer
     func makeNSView(context: Context) -> AVPlayerView {
-        let v = AVPlayerView()
-        v.player = player
-        v.controlsStyle = .none
-        return v
+        let v = AVPlayerView(); v.player = player; v.controlsStyle = .none; return v
     }
     func updateNSView(_ nsView: AVPlayerView, context: Context) {
         if nsView.player !== player { nsView.player = player }
+    }
+}
+
+// MARK: - Diamond
+
+private struct Diamond: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { p in
+            p.move(to: CGPoint(x: rect.midX, y: rect.minY))
+            p.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+            p.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+            p.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
+            p.closeSubpath()
+        }
     }
 }
 
@@ -24,58 +33,43 @@ private struct PlayerView: NSViewRepresentable {
 struct TimelineEditorView: View {
     @ObservedObject var model: TimelineModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.undoManager) private var undoManager
 
-    @State private var player = AVPlayer()
+    @State private var player         = AVPlayer()
     @State private var timeObserver: Any?
-    @State private var isPlaying = false
-    @State private var isExporting = false
+    @State private var isPlaying      = false
+    @State private var isExporting    = false
     @State private var exportProgress = 0.0
-    @State private var status = ""
-
-    /// Film strip: multiple frames per clip (one every ~2s or up to 8 frames).
+    @State private var status         = ""
     @State private var filmFrames: [UUID: [NSImage]] = [:]
-
-    /// Toast notification
     @State private var toast: String? = nil
     @State private var toastTask: Task<Void, Never>? = nil
+    @State private var seekTask: Task<Void, Never>? = nil
+    @State private var undoTick       = 0   // incremented after each edit to refresh disabled state
 
-    /// Captures model.playhead at drag start; reset by @GestureState.
-    @GestureState private var phDragStart: Double? = nil
+    private enum DragOp {
+        case seek
+        case trim(clipID: UUID, edge: TimelineModel.Edge, lastX: CGFloat, startSnapshot: TimelineModel.EditSnapshot)
+        case transitionBadge(clipIndex: Int)
+    }
+    @State private var dragOp: DragOp? = nil
 
-    /// Tracks the last cumulative DragGesture translation per clip, so trim receives
-    /// an incremental delta rather than the full cumulative displacement each frame.
-    @State private var lastTrimTranslation: [UUID: CGFloat] = [:]
+    // MARK: - Body
 
     var body: some View {
+        let canUndo = undoTick >= 0 && (undoManager?.canUndo ?? false)
+        let canRedo = undoTick >= 0 && (undoManager?.canRedo ?? false)
         VStack(spacing: 0) {
-            PlayerView(player: player)
-                .frame(minHeight: 280)
-                .background(Color.black)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .padding(14)
-                .overlay(alignment: .bottom) {
-                    if let msg = toast {
-                        Text(msg)
-                            .font(.callout.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(
-                                Capsule().fill(Color.black.opacity(0.8))
-                            )
-                            .padding(.bottom, 22)
-                            .transition(.opacity.combined(with: .move(edge: .bottom)))
-                    }
-                }
-
+            previewPane
             Divider()
-            transportBar.padding(.horizontal, 14).padding(.vertical, 10)
+            transportBar(canUndo: canUndo, canRedo: canRedo)
+                .padding(.horizontal, 14).padding(.vertical, 10)
             Divider()
             timelineArea
             Divider()
             exportRow.padding(.horizontal, 14).padding(.vertical, 10)
         }
-        .frame(minWidth: 860, minHeight: 740)
+        .frame(minWidth: 900, minHeight: 740)
         .task { await rebuild(seekTo: 0) }
         .task { await generateFilmStrip() }
         .onChange(of: model.clips) { _, _ in
@@ -87,9 +81,11 @@ struct TimelineEditorView: View {
                 forInterval: CMTime(seconds: 0.05, preferredTimescale: 600),
                 queue: .main
             ) { t in
-                let s = t.seconds
                 Task { @MainActor in
-                    if self.isPlaying { self.model.playhead = min(s, self.model.totalDuration) }
+                    if self.isPlaying {
+                        let tl = self.timelineTime(forPreviewTime: t.seconds)
+                        self.model.playhead = min(tl, self.model.totalDuration)
+                    }
                 }
             }
         }
@@ -98,45 +94,108 @@ struct TimelineEditorView: View {
         }
     }
 
+    // MARK: - Preview Pane
+
+    private var previewPane: some View {
+        PlayerView(player: player)
+            .frame(minHeight: 280)
+            .background(Color.black)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .padding(14)
+            .overlay(alignment: .bottom) {
+                if let msg = toast {
+                    Text(msg)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16).padding(.vertical, 8)
+                        .background(Capsule().fill(Color.black.opacity(0.82)))
+                        .padding(.bottom, 22)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+            }
+    }
+
     // MARK: - Transport Bar
 
-    private var transportBar: some View {
-        HStack(spacing: 8) {
+    private func transportBar(canUndo: Bool, canRedo: Bool) -> some View {
+        HStack(spacing: 10) {
             Button { seekTo(0) } label: { Image(systemName: "backward.end.fill") }
                 .buttonStyle(.borderless)
-                .help("Back to start")
 
             Button { togglePlay() } label: {
                 Image(systemName: isPlaying ? "pause.fill" : "play.fill").frame(width: 18)
             }
             .buttonStyle(.borderless)
             .keyboardShortcut(.space, modifiers: [])
-            .help("Play / Pause  ·  Space")
 
             Divider().frame(height: 20)
 
             Button { cut() } label: {
-                Label("✂ Cut at \(timeLabel(model.playhead))", systemImage: "scissors")
+                Label("Cut at \(timeLabel(model.playhead))", systemImage: "scissors")
             }
             .buttonStyle(.bordered)
             .keyboardShortcut("c", modifiers: [])
-            .help("Cut clip at playhead  ·  C")
+            .help("Split clip at playhead · C")
+
+            Divider().frame(height: 20)
+
+            Button {
+                undoManager?.undo()
+                undoTick += 1
+            } label: {
+                Image(systemName: "arrow.uturn.backward")
+            }
+            .buttonStyle(.borderless)
+            .disabled(!canUndo)
+            .help("Undo · ⌘Z")
+
+            Button {
+                undoManager?.redo()
+                undoTick += 1
+            } label: {
+                Image(systemName: "arrow.uturn.forward")
+            }
+            .buttonStyle(.borderless)
+            .disabled(!canRedo)
+            .help("Redo · ⇧⌘Z")
 
             if let sel = model.selection,
                let idx = model.clips.firstIndex(where: { $0.id == sel }) {
+                Divider().frame(height: 20)
+
+                Text("Clip \(idx + 1) / \(model.clips.count)")
+                    .font(.caption).foregroundStyle(.secondary)
+
+                if idx > 0 {
+                    let kind = model.clips[idx].transitionIn
+                    Menu {
+                        ForEach(["cut", "fade", "slide", "swipe"], id: \.self) { t in
+                            Button {
+                                model.setTransition(sel, t, undoManager: undoManager)
+                                undoTick += 1
+                            } label: {
+                                Label(t.capitalized, systemImage: transitionIcon(t))
+                            }
+                        }
+                    } label: {
+                        Label("→ \(kind)", systemImage: transitionIcon(kind))
+                            .font(.caption)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Transition entering this clip")
+                }
+
                 Button(role: .destructive) {
-                    model.delete(sel)
+                    model.delete(sel, undoManager: undoManager)
+                    undoTick += 1
                 } label: {
-                    Label("Remove Clip \(idx + 1)", systemImage: "trash")
+                    Label("Delete Clip", systemImage: "trash")
                 }
                 .buttonStyle(.bordered)
                 .disabled(model.clips.count <= 1)
-                .help("Remove selected clip  ·  ⌦")
-
-                Text("Clip \(idx + 1) selected")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 4)
+                .keyboardShortcut(.delete, modifiers: [])
+                .help("Delete selected clip · ⌦")
             }
 
             Spacer()
@@ -151,7 +210,7 @@ struct TimelineEditorView: View {
             Spacer()
 
             Image(systemName: "minus.magnifyingglass").foregroundStyle(.secondary)
-            Slider(value: $model.pixelsPerSecond, in: 20...320).frame(width: 130)
+            Slider(value: $model.pixelsPerSecond, in: 20...320).frame(width: 120)
             Image(systemName: "plus.magnifyingglass").foregroundStyle(.secondary)
         }
     }
@@ -164,71 +223,141 @@ struct TimelineEditorView: View {
 
         return ScrollView(.horizontal, showsIndicators: true) {
             ZStack(alignment: .topLeading) {
-
-                // Layer 0: seek background — catches all taps/drags
-                Color.clear
-                    .contentShape(Rectangle())
-                    .gesture(seekDragGesture(pps: pps))
-
-                // Layer 1: ruler (24px) + clips (108px)
                 VStack(spacing: 0) {
-                    timeRuler(pps: pps).frame(height: 24)
-                    clipsRow(pps: pps).frame(height: 108)
+                    rulerView(pps: pps).frame(height: 24)
+                    clipsLayer(pps: pps).frame(height: 108)
                 }
-
-                // Layer 2: playhead with time label + handle
-                playheadView(pps: pps)
+                ForEach(Array(1..<model.clips.count), id: \.self) { i in
+                    transitionBadgeView(clipIndex: i, pps: pps)
+                }
+                playheadLayer(pps: pps)
             }
             .frame(width: totalW, height: 140)
+            .contentShape(Rectangle())
+            .gesture(timelineGesture(pps: pps))
         }
         .frame(height: 140)
         .background(Color(NSColor.controlBackgroundColor))
     }
 
-    // MARK: - Seek Gestures
+    // MARK: - Transition Badge View (visual only; taps handled by parent gesture)
 
-    /// Tolerant seek during drag, exact seek on release.
-    private func seekDragGesture(pps: Double) -> some Gesture {
+    private func transitionBadgeView(clipIndex i: Int, pps: Double) -> some View {
+        let x = model.start(of: i) * pps + 16
+        let y = 24.0 + 54.0
+        let kind = model.clips[i].transitionIn
+        return ZStack {
+            Circle()
+                .fill(transitionColor(kind))
+                .frame(width: 26, height: 26)
+                .shadow(radius: 3)
+            Image(systemName: transitionIcon(kind))
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.white)
+        }
+        .offset(x: x - 13, y: y - 13)
+        .allowsHitTesting(false)
+    }
+
+    // MARK: - Unified Timeline Gesture
+
+    private func timelineGesture(pps: Double) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { v in
-                let t = max(0, min(model.totalDuration, (v.location.x - 16) / pps))
-                model.playhead = t
-                if isPlaying { player.pause(); isPlaying = false }
-                if let (i, _) = model.clipIndex(atTimelineTime: t), i < model.clips.count {
-                    model.selection = model.clips[i].id
+                if dragOp == nil {
+                    if isPlaying { player.pause(); isPlaying = false }
+                    dragOp = resolveIntent(at: v.location, pps: pps)
                 }
-                scrubSeek(t)
+                applyDrag(v.location, pps: pps)
             }
             .onEnded { v in
-                let t = max(0, min(model.totalDuration, (v.location.x - 16) / pps))
-                model.playhead = t
-                Task { await exactSeek(t) }
+                switch dragOp {
+                case .seek, .none:
+                    Task { await exactSeek(previewTime(forTimelineTime: model.playhead)) }
+                case .trim(_, _, _, let startSnapshot):
+                    model.commitTrimUndo(before: startSnapshot, undoManager: undoManager)
+                    undoTick += 1
+                case .transitionBadge(let clipIndex):
+                    if clipIndex < model.clips.count {
+                        model.cycleTransition(model.clips[clipIndex].id, undoManager: undoManager)
+                        undoTick += 1
+                        let kind = model.clips[clipIndex].transitionIn
+                        showToast("Transition: \(kind.capitalized)")
+                    }
+                }
+                dragOp = nil
             }
     }
 
-    /// Fast tolerant seek (0.1s tolerance) — used during drag for low latency.
-    private func scrubSeek(_ t: Double) {
-        Task {
-            await player.seek(
-                to: CMTime(seconds: t, preferredTimescale: 600),
-                toleranceBefore: CMTime(seconds: 0.1, preferredTimescale: 600),
-                toleranceAfter:  CMTime(seconds: 0.1, preferredTimescale: 600)
-            )
+    private func resolveIntent(at pt: CGPoint, pps: Double) -> DragOp {
+        // Check transition badges first (small circles at clip junctions)
+        let badgeCenterY: CGFloat = 24 + 54
+        for i in 1..<model.clips.count {
+            let badgeCenterX = CGFloat(model.start(of: i) * pps + 16)
+            let dist = sqrt(pow(pt.x - badgeCenterX, 2) + pow(pt.y - badgeCenterY, 2))
+            if dist < 20 { return .transitionBadge(clipIndex: i) }
+        }
+
+        let yInClips = pt.y - 24
+        guard yInClips >= 0, yInClips <= 108 else { return .seek }
+
+        if let selID = model.selection,
+           let i = model.clips.firstIndex(where: { $0.id == selID }) {
+            let clipLeft  = CGFloat(model.start(of: i) * pps) + 16
+            let clipRight = clipLeft + CGFloat(model.clips[i].duration * pps)
+            let snap = model.takeSnapshot()
+            if abs(pt.x - clipLeft)  < 18 { return .trim(clipID: selID, edge: .start, lastX: pt.x, startSnapshot: snap) }
+            if abs(pt.x - clipRight) < 18 { return .trim(clipID: selID, edge: .end,   lastX: pt.x, startSnapshot: snap) }
+        }
+        return .seek
+    }
+
+    private func applyDrag(_ pt: CGPoint, pps: Double) {
+        switch dragOp {
+        case .seek, .none:
+            let t = clamped(Double(pt.x - 16) / pps)
+            model.playhead = t
+            if let (i, _) = model.clipIndex(atTimelineTime: t), i < model.clips.count {
+                model.selection = model.clips[i].id
+            }
+            scrubSeek(previewTime(forTimelineTime: t))
+
+        case .trim(let clipID, let edge, let lastX, let startSnapshot):
+            let delta = Double(pt.x - lastX) / pps
+            model.trim(clipID, edge: edge, bySeconds: delta)
+            dragOp = .trim(clipID: clipID, edge: edge, lastX: pt.x, startSnapshot: startSnapshot)
+
+        case .transitionBadge:
+            break
         }
     }
 
-    /// Exact seek (zero tolerance) — used on mouseUp / drag end.
-    private func exactSeek(_ t: Double) async {
-        await player.seek(
-            to: CMTime(seconds: t, preferredTimescale: 600),
-            toleranceBefore: .zero,
-            toleranceAfter: .zero
-        )
+    private func clamped(_ t: Double) -> Double { max(0, min(model.totalDuration, t)) }
+
+    // MARK: - Timeline ↔ Preview Time
+
+    private func previewTime(forTimelineTime t: Double) -> Double {
+        guard let (i, offset) = model.clipIndex(atTimelineTime: t) else { return t }
+        var cursor = 0.0
+        for j in 0..<i { cursor += model.clips[j].duration }
+        return cursor + offset
     }
 
-    // MARK: - Time Ruler
+    private func timelineTime(forPreviewTime compT: Double) -> Double {
+        var cursor = 0.0
+        for i in model.clips.indices {
+            let end = cursor + model.clips[i].duration
+            if compT < end || i == model.clips.count - 1 {
+                return model.start(of: i) + (compT - cursor)
+            }
+            cursor = end
+        }
+        return compT
+    }
 
-    private func timeRuler(pps: Double) -> some View {
+    // MARK: - Ruler
+
+    private func rulerView(pps: Double) -> some View {
         Canvas { ctx, size in
             let step = rulerStep(pps: pps)
             var t = 0.0
@@ -254,232 +383,106 @@ struct TimelineEditorView: View {
     }
 
     private func rulerStep(pps: Double) -> Double {
-        [0.25, 0.5, 1, 2, 5, 10, 30, 60].first { $0 * 5 * pps >= 50 } ?? 60
+        [0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0].first { $0 * 5 * pps >= 50 } ?? 60
     }
 
-    // MARK: - Clips Row
+    // MARK: - Clips Layer
 
-    private func clipsRow(pps: Double) -> some View {
+    private func clipsLayer(pps: Double) -> some View {
         ZStack(alignment: .topLeading) {
-            // Clips
-            ForEach(Array(model.clips.enumerated()), id: \.element.id) { index, clip in
-                clipBlock(index: index, clip: clip, pps: pps)
-                    .offset(x: model.start(of: index) * pps + 16)
-            }
-            // Transition badges between clips
-            ForEach(Array(model.clips.enumerated().dropFirst()), id: \.element.id) { index, clip in
-                transitionBadge(index: index, clip: clip, pps: pps)
-                    .offset(x: model.start(of: index) * pps + 16 - 15, y: (108 - 44) / 2)
+            ForEach(model.clips.indices, id: \.self) { i in
+                clipView(index: i, pps: pps)
+                    .offset(x: model.start(of: i) * pps + 16)
             }
         }
-        .frame(width: (model.totalDuration + 4) * pps + 32, height: 108)
     }
 
-    // MARK: - Clip Block
-
-    private func clipBlock(index: Int, clip: Clip, pps: Double) -> some View {
-        let w = max(clip.duration * pps, 20)
+    private func clipView(index i: Int, pps: Double) -> some View {
+        let clip     = model.clips[i]
+        let w        = max(clip.duration * pps, 24)
         let selected = model.selection == clip.id
+        let frames   = filmFrames[clip.id] ?? []
+        let nFrames  = max(1, Int(w / 50))
 
         return ZStack(alignment: .topLeading) {
-            // Film strip thumbnails
-            filmStrip(clip: clip, w: w)
-                .frame(width: w, height: 100)
-                .clipped()
+            HStack(spacing: 0) {
+                ForEach(0..<nFrames, id: \.self) { fi in
+                    Group {
+                        if frames.isEmpty {
+                            Rectangle().fill(Color.gray.opacity(0.15))
+                        } else {
+                            Image(nsImage: frames[fi % frames.count])
+                                .resizable().scaledToFill().clipped().opacity(0.52)
+                        }
+                    }
+                    .frame(width: 40, height: 100)
+                }
+            }
+            .frame(width: w, height: 100).clipped()
 
-            // Tint overlay
             RoundedRectangle(cornerRadius: 5)
-                .fill(selected
-                      ? Color.accentColor.opacity(0.3)
-                      : Color.gray.opacity(0.25))
+                .fill(selected ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.10))
 
-            // Border — bright when selected
             RoundedRectangle(cornerRadius: 5)
-                .stroke(selected ? Color.accentColor : Color.white.opacity(0.2),
+                .stroke(selected ? Color.accentColor : Color.white.opacity(0.22),
                         lineWidth: selected ? 2.5 : 1)
 
-            // Clip label top-left
-            Text("Clip \(index + 1)")
-                .font(.caption2.bold())
-                .foregroundStyle(.white)
-                .shadow(color: .black, radius: 1)
-                .padding(4)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Clip \(i + 1)").font(.caption2.bold()).foregroundStyle(.white)
+                    .shadow(color: .black, radius: 1)
+            }
+            .padding(5)
 
-            // Duration label bottom-right
             Text(timeLabel(clip.duration))
-                .font(.system(size: 8))
-                .foregroundStyle(.white.opacity(0.8))
-                .padding(3)
+                .font(.system(size: 8)).foregroundStyle(.white.opacity(0.8))
+                .padding(4)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
 
-            // Trim handles — ALWAYS visible, drag-active only when selected
-            trimHandleView(.start, clip: clip, pps: pps, active: selected)
-            trimHandleView(.end,   clip: clip, pps: pps, active: selected)
+            trimHandles(selected: selected).frame(width: w, height: 100)
         }
         .frame(width: w, height: 100)
-        // No clipShape — would clip the trim handles
-        .contentShape(Rectangle())
-        .onTapGesture {
-            model.selection = clip.id
-        }
     }
 
-    // MARK: - Film Strip
-
-    private func filmStrip(clip: Clip, w: CGFloat) -> some View {
-        let count = max(1, Int(w / 50))
-        let frames = filmFrames[clip.id] ?? []
-
-        return HStack(spacing: 0) {
-            ForEach(0..<count, id: \.self) { i in
-                let img: NSImage? = frames.isEmpty ? nil : frames[i % frames.count]
-                Group {
-                    if let img = img {
-                        Image(nsImage: img)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: 40, height: 100)
-                            .clipped()
-                            .opacity(0.55)
-                    } else {
-                        Rectangle()
-                            .fill(Color.gray.opacity(0.2))
-                            .frame(width: 40, height: 100)
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: - Trim Handles
-
-    private func trimHandleView(_ edge: TimelineModel.Edge, clip: Clip, pps: Double, active: Bool) -> some View {
-        let alignment: Alignment = edge == .start ? .leading : .trailing
-        if active {
-            return AnyView(
+    @ViewBuilder
+    private func trimHandles(selected: Bool) -> some View {
+        let opacity: Double = selected ? 0.92 : 0.28
+        let width:   CGFloat = selected ? 12 : 8
+        HStack {
+            VStack {
                 Rectangle()
-                    .fill(Color.white.opacity(0.9))
-                    .frame(width: 10, height: 100)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
-                    .onHover { inside in inside ? NSCursor.resizeLeftRight.push() : NSCursor.pop() }
-                    .highPriorityGesture(
-                        DragGesture()
-                            .onChanged { v in
-                                let last = lastTrimTranslation[clip.id] ?? 0
-                                let delta = Double(v.translation.width - last) / pps
-                                lastTrimTranslation[clip.id] = v.translation.width
-                                model.trim(clip.id, edge: edge, bySeconds: delta)
-                            }
-                            .onEnded { _ in lastTrimTranslation.removeValue(forKey: clip.id) }
-                    )
-            )
-        } else {
-            return AnyView(
-                Rectangle()
-                    .fill(Color.white.opacity(0.3))
-                    .frame(width: 10, height: 100)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
-                    .onHover { inside in inside ? NSCursor.resizeLeftRight.push() : NSCursor.pop() }
-            )
-        }
-    }
-
-    // MARK: - Transition Badge
-
-    private func transitionBadge(index: Int, clip: Clip, pps: Double) -> some View {
-        let kind = clip.transitionIn
-        return Button { cycleTransition(clip.id, current: kind) } label: {
-            VStack(spacing: 2) {
-                Image(systemName: transitionIcon(kind)).font(.system(size: 11, weight: .semibold))
-                Text(kind == "cut" ? "cut" : kind).font(.system(size: 8))
+                    .fill(Color.white.opacity(opacity))
+                    .frame(width: width, height: 36)
+                    .cornerRadius(3)
             }
-            .foregroundStyle(.white)
-            .frame(width: 30, height: 44)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(kind == "cut"
-                          ? AnyShapeStyle(Color.gray.opacity(0.55))
-                          : AnyShapeStyle(Color.accentColor.opacity(0.85)))
-            )
-            .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
-        }
-        .buttonStyle(.plain)
-        .help("Transition: \(kind)  —  click to change")
-    }
-
-    private func transitionIcon(_ kind: String) -> String {
-        switch kind {
-        case "fade":  return "circle.lefthalf.filled"
-        case "slide": return "arrow.right"
-        case "swipe": return "hand.draw"
-        default:      return "scissors"
+            .frame(maxHeight: .infinity)
+            Spacer()
+            VStack {
+                Rectangle()
+                    .fill(Color.white.opacity(opacity))
+                    .frame(width: width, height: 36)
+                    .cornerRadius(3)
+            }
+            .frame(maxHeight: .infinity)
         }
     }
 
-    private func cycleTransition(_ id: UUID, current: String) {
-        let order = ["cut", "fade", "slide", "swipe"]
-        let next = ((order.firstIndex(of: current) ?? 0) + 1) % order.count
-        model.setTransition(id, order[next])
-    }
+    // MARK: - Playhead Layer
 
-    // MARK: - Playhead View
-
-    private func playheadView(pps: Double) -> some View {
+    private func playheadLayer(pps: Double) -> some View {
         ZStack(alignment: .top) {
-            // Wide invisible hit area
-            Rectangle()
-                .fill(Color.clear)
-                .frame(width: 24)
-                .contentShape(Rectangle())
-
-            // Visual red line
-            Rectangle()
-                .fill(Color.red)
-                .frame(width: 2)
-
-            // Diamond cap
-            Diamond()
-                .fill(Color.red)
-                .frame(width: 12, height: 8)
-
-            // Time bubble above diamond
-            Text(timeLabel(model.playhead))
-                .font(.system(size: 9, design: .monospaced).weight(.semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(
-                    Capsule().fill(Color.black.opacity(0.85))
-                )
-                .offset(y: -18)
+            Rectangle().fill(Color.red).frame(width: 2)
+            VStack(spacing: 2) {
+                Text(timeLabel(model.playhead))
+                    .font(.system(size: 9, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4).padding(.vertical, 2)
+                    .background(Capsule().fill(Color.black.opacity(0.85)))
+                Diamond().fill(Color.red).frame(width: 14, height: 10)
+            }
         }
-        .frame(height: 140)
-        .offset(x: model.playhead * pps + 16 - 1)
-        .onHover { inside in inside ? NSCursor.resizeLeftRight.push() : NSCursor.pop() }
-        .highPriorityGesture(
-            DragGesture(minimumDistance: 0)
-                .updating($phDragStart) { _, state, _ in
-                    if state == nil { state = model.playhead }
-                }
-                .onChanged { v in
-                    let base = phDragStart ?? model.playhead
-                    let t = max(0, min(model.totalDuration,
-                                       base + Double(v.translation.width) / pps))
-                    model.playhead = t
-                    if isPlaying { player.pause(); isPlaying = false }
-                    if let (i, _) = model.clipIndex(atTimelineTime: t), i < model.clips.count {
-                        model.selection = model.clips[i].id
-                    }
-                    scrubSeek(t)
-                }
-                .onEnded { v in
-                    let base = phDragStart ?? model.playhead
-                    let t = max(0, min(model.totalDuration,
-                                       base + Double(v.translation.width) / pps))
-                    model.playhead = t
-                    Task { await exactSeek(t) }
-                }
-        )
+        .frame(width: 2, height: 140)
+        .offset(x: model.playhead * pps + 16)
+        .allowsHitTesting(false)
     }
 
     // MARK: - Export Row
@@ -494,7 +497,7 @@ struct TimelineEditorView: View {
             }
             Spacer()
             Button("Done") { dismiss() }
-            Button("Export edited.mov") { export() }
+            Button("Export edited.mov") { exportVideo() }
                 .buttonStyle(.borderedProminent)
                 .disabled(isExporting)
         }
@@ -507,45 +510,62 @@ struct TimelineEditorView: View {
         isPlaying.toggle()
     }
 
-    private func seekTo(_ t: Double) {
+    private func seekTo(_ timelineTime: Double) {
         if isPlaying { player.pause(); isPlaying = false }
-        model.playhead = t
-        Task { await exactSeek(t) }
+        model.playhead = timelineTime
+        Task { await exactSeek(previewTime(forTimelineTime: timelineTime)) }
     }
 
-    private func rebuild(seekTo time: Double) async {
-        guard let (comp, vc) = try? await TimelineExporter.build(model) else { return }
+    private func scrubSeek(_ compTime: Double) {
+        seekTask?.cancel()
+        seekTask = Task {
+            await player.seek(
+                to: CMTime(seconds: compTime, preferredTimescale: 600),
+                toleranceBefore: CMTime(seconds: 0.1, preferredTimescale: 600),
+                toleranceAfter:  CMTime(seconds: 0.1, preferredTimescale: 600))
+        }
+    }
+
+    private func exactSeek(_ compTime: Double) async {
+        seekTask?.cancel()
+        seekTask = nil
+        await player.seek(
+            to: CMTime(seconds: compTime, preferredTimescale: 600),
+            toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    // MARK: - Rebuild Preview
+
+    private func rebuild(seekTo timelineTime: Double) async {
+        guard let comp = try? await TimelineExporter.buildPreview(model) else { return }
         let item = AVPlayerItem(asset: comp)
-        item.videoComposition = vc
         player.replaceCurrentItem(with: item)
-        await exactSeek(time)
+        await exactSeek(previewTime(forTimelineTime: timelineTime))
     }
 
-    // MARK: - Cut with feedback
+    // MARK: - Cut
 
     private func cut() {
-        let before = model.clips.count
-        model.splitAtPlayhead()
-        if model.clips.count > before {
-            showToast("Clip split")
+        let time = timeLabel(model.playhead)
+        if model.splitAtPlayhead(undoManager: undoManager) {
+            undoTick += 1
+            showToast("Split at \(time) · ⌦ to delete selected clip · ⌘Z to undo")
         } else {
-            showToast("Too close to edge")
+            showToast("Too close to clip edge")
         }
     }
 
     // MARK: - Export
 
-    private func export() {
+    private func exportVideo() {
         isExporting = true; exportProgress = 0
-        let out = model.sourceURL.deletingLastPathComponent()
-            .appendingPathComponent("edited.mov")
+        let out = model.sourceURL.deletingLastPathComponent().appendingPathComponent("edited.mov")
         Task {
             do {
                 let url = try await TimelineExporter.export(model, to: out) { p in
                     Task { @MainActor in exportProgress = p }
                 }
                 status = "Saved \(url.lastPathComponent)"
-                NSWorkspace.shared.open(url)
             } catch {
                 status = "Export failed: \(error.localizedDescription)"
             }
@@ -559,13 +579,13 @@ struct TimelineEditorView: View {
         withAnimation { toast = msg }
         toastTask?.cancel()
         toastTask = Task {
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled else { return }
             withAnimation { toast = nil }
         }
     }
 
-    // MARK: - Film Strip Generation
+    // MARK: - Film Strip
 
     private func generateFilmStrip() async {
         let asset = AVURLAsset(url: model.sourceURL)
@@ -574,15 +594,13 @@ struct TimelineEditorView: View {
         gen.maximumSize = CGSize(width: 100, height: 60)
         gen.requestedTimeToleranceBefore = CMTime(seconds: 1, preferredTimescale: 600)
         gen.requestedTimeToleranceAfter  = CMTime(seconds: 1, preferredTimescale: 600)
-
         for clip in model.clips {
-            if filmFrames[clip.id] != nil { continue }  // already generated
-            let interval = max(2.0, clip.duration / 8)  // max 8 frames per clip
+            if filmFrames[clip.id] != nil { continue }
+            let interval = max(2.0, clip.duration / 8)
             var frames: [NSImage] = []
             var t = clip.sourceStart
             while t < clip.sourceStart + clip.duration {
-                let ct = CMTime(seconds: t, preferredTimescale: 600)
-                if let cg = try? await gen.image(at: ct).image {
+                if let cg = try? await gen.image(at: CMTime(seconds: t, preferredTimescale: 600)).image {
                     frames.append(NSImage(cgImage: cg, size: NSSize(width: 100, height: 60)))
                 }
                 t += interval
@@ -593,22 +611,26 @@ struct TimelineEditorView: View {
 
     // MARK: - Helpers
 
+    private func transitionIcon(_ kind: String) -> String {
+        switch kind {
+        case "fade":  return "circle.lefthalf.filled"
+        case "slide": return "arrow.right"
+        case "swipe": return "hand.draw"
+        default:      return "scissors"
+        }
+    }
+
+    private func transitionColor(_ kind: String) -> Color {
+        switch kind {
+        case "fade":  return .purple
+        case "slide": return .blue
+        case "swipe": return .orange
+        default:      return Color(NSColor.systemGray)
+        }
+    }
+
     private func timeLabel(_ t: Double) -> String {
         let v = max(0, t)
         return String(format: "%d:%05.2f", Int(v) / 60, v.truncatingRemainder(dividingBy: 60))
-    }
-}
-
-// MARK: - Diamond Shape (playhead cap)
-
-private struct Diamond: Shape {
-    func path(in rect: CGRect) -> Path {
-        Path { p in
-            p.move(to: CGPoint(x: rect.midX, y: rect.minY))
-            p.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
-            p.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
-            p.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
-            p.closeSubpath()
-        }
     }
 }
