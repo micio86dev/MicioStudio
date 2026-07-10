@@ -66,9 +66,11 @@ final class TemplateCompositor: NSObject, AVVideoCompositing {
     nonisolated(unsafe) private var renderContext: AVVideoCompositionRenderContext?
     private let queue = DispatchQueue(label: "dev.miciodev.compositor")
 
-    var sourcePixelBufferAttributes: [String: any Sendable]? = [
+    // Protocol requires only { get }; these never change, so `let` avoids the mutable-stored-
+    // property warning on this Sendable-conforming class.
+    let sourcePixelBufferAttributes: [String: any Sendable]? = [
         kCVPixelBufferPixelFormatTypeKey as String: [kCVPixelFormatType_32BGRA]]
-    var requiredPixelBufferAttributesForRenderContext: [String: any Sendable] = [
+    let requiredPixelBufferAttributesForRenderContext: [String: any Sendable] = [
         kCVPixelBufferPixelFormatTypeKey as String: [kCVPixelFormatType_32BGRA]]
 
     func renderContextChanged(_ newRenderContext: AVVideoCompositionRenderContext) {
