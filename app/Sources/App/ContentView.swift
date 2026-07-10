@@ -6,7 +6,37 @@ extension Array {
     subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
 }
 
+// Intercepts F1–F9 via a local NSEvent monitor (SwiftUI .keyboardShortcut can't reliably
+// capture function keys before the system handles them). @MainActor because NSEvent local
+// monitors fire on the main thread; @Published drives .onReceive in ContentView.
+@MainActor
+private final class FKeyMediator: ObservableObject {
+    @Published var pressedIndex: Int? = nil
+    nonisolated(unsafe) private var monitor: Any?
+    private static let fKeys: [Character] = [
+        "\u{F704}", "\u{F705}", "\u{F706}", "\u{F707}", "\u{F708}",
+        "\u{F709}", "\u{F70A}", "\u{F70B}", "\u{F70C}"
+    ]
+
+    func start() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self,
+                  let chars = event.charactersIgnoringModifiers,
+                  let ch = chars.first,
+                  let idx = Self.fKeys.firstIndex(of: ch) else { return event }
+            self.pressedIndex = idx
+            return nil
+        }
+    }
+
+    deinit {
+        if let m = monitor { NSEvent.removeMonitor(m) }
+    }
+}
+
 struct ContentView: View {
+    @StateObject private var fKeyMediator = FKeyMediator()
     @StateObject private var recorder = RecordingCoordinator()
     @StateObject private var perms = PermissionManager()
     @StateObject private var templates = TemplateStore()
@@ -116,9 +146,11 @@ struct ContentView: View {
             let saved = UserDefaults.standard.string(forKey: "lastActiveTemplateID")
             if let saved, templates.templates.contains(where: { $0.id == saved }) {
                 activeTemplateID = saved
+                loadLive()
             }
             recordings.reload()
             updateSnapshot()
+            fKeyMediator.start()
         }
         .onChange(of: recorder.combinedURL) { _, url in
             recordings.reload()
@@ -127,8 +159,16 @@ struct ContentView: View {
         .onChange(of: previewLive) { _, _ in updateSnapshot() }
         .onChange(of: recorder.selectedDisplayID) { _, _ in updateSnapshot() }
         .onChange(of: recorder.selectedWindowID) { _, _ in updateSnapshot() }
-        .sheet(isPresented: $showTimeline) {
-            if let model = timelineModel { TimelineEditorView(model: model) }
+        .onChange(of: showTimeline) { _, open in
+            if open, let model = timelineModel { openTimelineWindow(model) }
+            showTimeline = false
+        }
+        .onReceive(fKeyMediator.$pressedIndex) { idx in
+            guard let idx, var d = liveDoc, d.scenes.indices.contains(idx) else { return }
+            d.activeSceneIndex = idx
+            liveDoc = d
+            saveLive()
+            fKeyMediator.pressedIndex = nil
         }
     }
 
@@ -146,6 +186,20 @@ struct ContentView: View {
             displayID = recorder.selectedDisplayID
         }
         screenSnap.start(displayID: displayID, windowID: recorder.selectedWindowID)
+    }
+
+    private func openTimelineWindow(_ model: TimelineModel) {
+        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1400, height: 900)
+        let window = NSWindow(
+            contentRect: screen,
+            styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false)
+        window.title = "Timeline Editor"
+        window.contentViewController = NSHostingController(rootView: TimelineEditorView(model: model))
+        window.setFrame(screen, display: true)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
     }
 
     private func openTimeline(_ url: URL) {
@@ -202,8 +256,9 @@ struct ContentView: View {
                 .onChange(of: liveDoc?.activeSceneIndex) { _, idx in
                     if let idx, recorder.isRecording { recorder.recordSceneSwitch(to: idx, transition: transition) }
                 }
-                CanvasView(doc: liveBinding, selection: $liveSelection, live: previewLive,
-                           screenImage: screenSnap.image, defaultCameraID: recorder.selectedCameraDeviceID)
+                CanvasView(doc: liveBinding, selection: $liveSelection, live: true,
+                           screenImage: screenSnap.image, defaultCameraID: recorder.selectedCameraDeviceID,
+                           cameraActive: true)
                     .background(Color.black)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(.secondary.opacity(0.3)))

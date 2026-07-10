@@ -29,18 +29,12 @@ final class TimelineModel: ObservableObject {
 
     // MARK: - Layout
 
-    func overlap(before index: Int) -> Double {
-        guard index > 0, clips.indices.contains(index), clips[index].transitionIn != "cut" else { return 0 }
-        return min(transitionDuration, min(clips[index - 1].duration, clips[index].duration) / 2)
-    }
+    // Display model: clips are always sequential, no overlap.
+    // The export compositor computes its own overlaps internally.
+    func overlap(before index: Int) -> Double { return 0 }
 
     func start(of index: Int) -> Double {
-        var t = 0.0
-        for i in 0..<index {
-            t += clips[i].duration
-            t -= overlap(before: i + 1)
-        }
-        return max(0, t)
+        clips[0..<index].reduce(0) { $0 + $1.duration }
     }
 
     var totalDuration: Double {
@@ -97,11 +91,11 @@ final class TimelineModel: ObservableObject {
         guard let (i, offset) = clipIndex(atTimelineTime: playhead),
               offset > 0.01, offset < clips[i].duration - 0.01 else { return false }
         let before = takeSnapshot()
-        var left = clips[i], right = clips[i]
+        var left = clips[i]
         left.duration = offset
-        right.sourceStart = clips[i].sourceStart + offset
-        right.duration = clips[i].duration - offset
-        right.transitionIn = "cut"
+        let right = Clip(sourceStart: clips[i].sourceStart + offset,
+                         duration: clips[i].duration - offset,
+                         transitionIn: "cut")
         clips.replaceSubrange(i...i, with: [left, right])
         selection = right.id
         registerChange(before: before, after: takeSnapshot(), undoManager: undoManager, name: "Split Clip")

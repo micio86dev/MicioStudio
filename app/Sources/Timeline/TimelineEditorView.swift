@@ -30,14 +30,48 @@ private struct Diamond: Shape {
 
 // MARK: - TimelineEditorView
 
+// Holds AVPlayer + its time observer so deinit guarantees cleanup regardless of
+// SwiftUI view lifecycle ordering (onDisappear is unreliable in NSHostingController windows).
+@MainActor
+private final class PlayerCoordinator: ObservableObject {
+    let player = AVPlayer()
+    @Published var isPlaying = false
+    // nonisolated(unsafe): accessed from nonisolated deinit and @Sendable AVPlayer callback.
+    nonisolated(unsafe) private var timeObserver: Any?
+
+    func start(model: TimelineModel) {
+        guard timeObserver == nil else { return }
+        // Delivered on the main queue → safe to update MainActor state synchronously.
+        // With zero display overlap, preview time == timeline time, so t.seconds IS the playhead.
+        timeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.033, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self, weak model] t in
+            MainActor.assumeIsolated {
+                guard let self, self.isPlaying, let model else { return }
+                model.playhead = min(t.seconds, model.totalDuration)
+            }
+        }
+    }
+
+    func stop() {
+        if let o = timeObserver { player.removeTimeObserver(o); timeObserver = nil }
+        isPlaying = false
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+    }
+
+    deinit {
+        if let o = timeObserver { player.removeTimeObserver(o) }
+        player.pause()
+    }
+}
+
 struct TimelineEditorView: View {
     @ObservedObject var model: TimelineModel
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.undoManager) private var undoManager
+    @StateObject private var coordinator = PlayerCoordinator()
 
-    @State private var player         = AVPlayer()
-    @State private var timeObserver: Any?
-    @State private var isPlaying      = false
     @State private var isExporting    = false
     @State private var exportProgress = 0.0
     @State private var status         = ""
@@ -45,7 +79,9 @@ struct TimelineEditorView: View {
     @State private var toast: String? = nil
     @State private var toastTask: Task<Void, Never>? = nil
     @State private var seekTask: Task<Void, Never>? = nil
-    @State private var undoTick       = 0   // incremented after each edit to refresh disabled state
+    @State private var undoTick       = 0
+
+    private var player: AVPlayer { coordinator.player }
 
     private enum DragOp {
         case seek
@@ -53,6 +89,11 @@ struct TimelineEditorView: View {
         case transitionBadge(clipIndex: Int)
     }
     @State private var dragOp: DragOp? = nil
+
+    private func closeWindow() {
+        coordinator.stop()
+        DispatchQueue.main.async { NSApp.keyWindow?.close() }
+    }
 
     // MARK: - Body
 
@@ -69,7 +110,7 @@ struct TimelineEditorView: View {
             Divider()
             exportRow.padding(.horizontal, 14).padding(.vertical, 10)
         }
-        .frame(minWidth: 900, minHeight: 740)
+        .frame(minWidth: 1200, minHeight: 900)
         .task { await rebuild(seekTo: 0) }
         .task { await generateFilmStrip() }
         .onChange(of: model.clips) { _, _ in
@@ -77,20 +118,7 @@ struct TimelineEditorView: View {
             Task { await generateFilmStrip() }
         }
         .onAppear {
-            timeObserver = player.addPeriodicTimeObserver(
-                forInterval: CMTime(seconds: 0.05, preferredTimescale: 600),
-                queue: .main
-            ) { t in
-                Task { @MainActor in
-                    if self.isPlaying {
-                        let tl = self.timelineTime(forPreviewTime: t.seconds)
-                        self.model.playhead = min(tl, self.model.totalDuration)
-                    }
-                }
-            }
-        }
-        .onDisappear {
-            if let o = timeObserver { player.removeTimeObserver(o); timeObserver = nil }
+            coordinator.start(model: model)
         }
     }
 
@@ -123,7 +151,7 @@ struct TimelineEditorView: View {
                 .buttonStyle(.borderless)
 
             Button { togglePlay() } label: {
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill").frame(width: 18)
+                Image(systemName: coordinator.isPlaying ? "pause.fill" : "play.fill").frame(width: 18)
             }
             .buttonStyle(.borderless)
             .keyboardShortcut(.space, modifiers: [])
@@ -223,12 +251,12 @@ struct TimelineEditorView: View {
 
         return ScrollView(.horizontal, showsIndicators: true) {
             ZStack(alignment: .topLeading) {
-                VStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 0) {
                     rulerView(pps: pps).frame(height: 24)
                     clipsLayer(pps: pps).frame(height: 108)
                 }
-                ForEach(Array(1..<model.clips.count), id: \.self) { i in
-                    transitionBadgeView(clipIndex: i, pps: pps)
+                ForEach(Array(model.clips.enumerated().dropFirst()), id: \.element.id) { i, clip in
+                    transitionBadgeView(clip: clip, index: i, pps: pps)
                 }
                 playheadLayer(pps: pps)
             }
@@ -242,10 +270,10 @@ struct TimelineEditorView: View {
 
     // MARK: - Transition Badge View (visual only; taps handled by parent gesture)
 
-    private func transitionBadgeView(clipIndex i: Int, pps: Double) -> some View {
+    private func transitionBadgeView(clip: Clip, index i: Int, pps: Double) -> some View {
         let x = model.start(of: i) * pps + 16
         let y = 24.0 + 54.0
-        let kind = model.clips[i].transitionIn
+        let kind = clip.transitionIn
         return ZStack {
             Circle()
                 .fill(transitionColor(kind))
@@ -265,7 +293,7 @@ struct TimelineEditorView: View {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { v in
                 if dragOp == nil {
-                    if isPlaying { player.pause(); isPlaying = false }
+                    if coordinator.isPlaying { player.pause(); coordinator.isPlaying = false }
                     dragOp = resolveIntent(at: v.location, pps: pps)
                 }
                 applyDrag(v.location, pps: pps)
@@ -389,8 +417,10 @@ struct TimelineEditorView: View {
     // MARK: - Clips Layer
 
     private func clipsLayer(pps: Double) -> some View {
-        ZStack(alignment: .topLeading) {
-            ForEach(model.clips.indices, id: \.self) { i in
+        let w = (model.totalDuration + 4) * pps + 32
+        return ZStack(alignment: .topLeading) {
+            Color.clear.frame(width: w, height: 100)
+            ForEach(Array(model.clips.enumerated()), id: \.element.id) { i, _ in
                 clipView(index: i, pps: pps)
                     .offset(x: model.start(of: i) * pps + 16)
             }
@@ -402,7 +432,7 @@ struct TimelineEditorView: View {
         let w        = max(clip.duration * pps, 24)
         let selected = model.selection == clip.id
         let frames   = filmFrames[clip.id] ?? []
-        let nFrames  = max(1, Int(w / 50))
+        let nFrames  = max(1, Int(ceil(w / 40.0)))
 
         return ZStack(alignment: .topLeading) {
             HStack(spacing: 0) {
@@ -445,24 +475,24 @@ struct TimelineEditorView: View {
 
     @ViewBuilder
     private func trimHandles(selected: Bool) -> some View {
-        let opacity: Double = selected ? 0.92 : 0.28
-        let width:   CGFloat = selected ? 12 : 8
-        HStack {
-            VStack {
-                Rectangle()
-                    .fill(Color.white.opacity(opacity))
-                    .frame(width: width, height: 36)
-                    .cornerRadius(3)
+        if selected {
+            HStack {
+                VStack {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.92))
+                        .frame(width: 12, height: 36)
+                        .cornerRadius(3)
+                }
+                .frame(maxHeight: .infinity)
+                Spacer()
+                VStack {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.92))
+                        .frame(width: 12, height: 36)
+                        .cornerRadius(3)
+                }
+                .frame(maxHeight: .infinity)
             }
-            .frame(maxHeight: .infinity)
-            Spacer()
-            VStack {
-                Rectangle()
-                    .fill(Color.white.opacity(opacity))
-                    .frame(width: width, height: 36)
-                    .cornerRadius(3)
-            }
-            .frame(maxHeight: .infinity)
         }
     }
 
@@ -477,6 +507,7 @@ struct TimelineEditorView: View {
                     .foregroundStyle(.white)
                     .padding(.horizontal, 4).padding(.vertical, 2)
                     .background(Capsule().fill(Color.black.opacity(0.85)))
+                    .fixedSize()
                 Diamond().fill(Color.red).frame(width: 14, height: 10)
             }
         }
@@ -496,7 +527,7 @@ struct TimelineEditorView: View {
                 Text(status).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Done") { dismiss() }
+            Button("Done") { closeWindow() }
             Button("Export edited.mov") { exportVideo() }
                 .buttonStyle(.borderedProminent)
                 .disabled(isExporting)
@@ -506,12 +537,12 @@ struct TimelineEditorView: View {
     // MARK: - Playback
 
     private func togglePlay() {
-        isPlaying ? player.pause() : player.play()
-        isPlaying.toggle()
+        coordinator.isPlaying ? player.pause() : player.play()
+        coordinator.isPlaying.toggle()
     }
 
     private func seekTo(_ timelineTime: Double) {
-        if isPlaying { player.pause(); isPlaying = false }
+        if coordinator.isPlaying { player.pause(); coordinator.isPlaying = false }
         model.playhead = timelineTime
         Task { await exactSeek(previewTime(forTimelineTime: timelineTime)) }
     }
