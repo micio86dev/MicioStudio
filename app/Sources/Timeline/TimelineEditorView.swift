@@ -35,23 +35,27 @@ private struct Diamond: Shape {
 @MainActor
 private final class PlayerCoordinator: ObservableObject {
     let player = AVPlayer()
-    // nonisolated(unsafe): accessed from deinit (nonisolated) and @Sendable AVPlayer callback,
-    // both of which run on the main thread in practice.
+    @Published var isPlaying = false
+    // nonisolated(unsafe): accessed from nonisolated deinit and @Sendable AVPlayer callback.
     nonisolated(unsafe) private var timeObserver: Any?
-    nonisolated(unsafe) var onTick: ((Double) -> Void)?
 
-    func start() {
+    func start(model: TimelineModel) {
         guard timeObserver == nil else { return }
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.05, preferredTimescale: 600),
             queue: .main
-        ) { [weak self] t in
-            self?.onTick?(t.seconds)
+        ) { [weak self, weak model] t in
+            guard let self, self.isPlaying, let model else { return }
+            Task { @MainActor [weak self, weak model] in
+                guard let self, self.isPlaying, let model else { return }
+                model.playhead = min(t.seconds, model.totalDuration)
+            }
         }
     }
 
     func stop() {
         if let o = timeObserver { player.removeTimeObserver(o); timeObserver = nil }
+        isPlaying = false
         player.pause()
         player.replaceCurrentItem(with: nil)
     }
@@ -67,7 +71,6 @@ struct TimelineEditorView: View {
     @Environment(\.undoManager) private var undoManager
     @StateObject private var coordinator = PlayerCoordinator()
 
-    @State private var isPlaying      = false
     @State private var isExporting    = false
     @State private var exportProgress = 0.0
     @State private var status         = ""
@@ -114,16 +117,7 @@ struct TimelineEditorView: View {
             Task { await generateFilmStrip() }
         }
         .onAppear {
-            coordinator.onTick = { [weak model] t in
-                guard let model else { return }
-                Task { @MainActor in
-                    if self.isPlaying {
-                        let tl = self.timelineTime(forPreviewTime: t)
-                        model.playhead = min(tl, model.totalDuration)
-                    }
-                }
-            }
-            coordinator.start()
+            coordinator.start(model: model)
         }
     }
 
@@ -156,7 +150,7 @@ struct TimelineEditorView: View {
                 .buttonStyle(.borderless)
 
             Button { togglePlay() } label: {
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill").frame(width: 18)
+                Image(systemName: coordinator.isPlaying ? "pause.fill" : "play.fill").frame(width: 18)
             }
             .buttonStyle(.borderless)
             .keyboardShortcut(.space, modifiers: [])
@@ -298,7 +292,7 @@ struct TimelineEditorView: View {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { v in
                 if dragOp == nil {
-                    if isPlaying { player.pause(); isPlaying = false }
+                    if coordinator.isPlaying { player.pause(); coordinator.isPlaying = false }
                     dragOp = resolveIntent(at: v.location, pps: pps)
                 }
                 applyDrag(v.location, pps: pps)
@@ -542,12 +536,12 @@ struct TimelineEditorView: View {
     // MARK: - Playback
 
     private func togglePlay() {
-        isPlaying ? player.pause() : player.play()
-        isPlaying.toggle()
+        coordinator.isPlaying ? player.pause() : player.play()
+        coordinator.isPlaying.toggle()
     }
 
     private func seekTo(_ timelineTime: Double) {
-        if isPlaying { player.pause(); isPlaying = false }
+        if coordinator.isPlaying { player.pause(); coordinator.isPlaying = false }
         model.playhead = timelineTime
         Task { await exactSeek(previewTime(forTimelineTime: timelineTime)) }
     }

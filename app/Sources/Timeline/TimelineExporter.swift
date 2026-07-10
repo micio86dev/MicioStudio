@@ -126,21 +126,31 @@ enum TimelineExporter {
         let scale: CMTimeScale = 48_000   // exact for 48kHz audio and 30fps video
         var layout: [ClipLayout] = []
         let clips = model.clips
+        // Overlaps are computed locally here — the display model uses 0 overlap so clips
+        // don't shift in the timeline (CapCut style). The export composition still crossfades
+        // by borrowing transitionDuration/2 frames from each adjacent clip.
+        var exportCursor = 0.0
         for i in clips.indices {
             let c = clips[i]
-            let overlapBefore = model.overlap(before: i)
-            let compStart = CMTime(seconds: model.start(of: i), preferredTimescale: scale)
+            let overlapBefore: Double
+            if i > 0, c.transitionIn != "cut" {
+                overlapBefore = min(model.transitionDuration,
+                                    min(clips[i - 1].duration, c.duration) / 2)
+            } else {
+                overlapBefore = 0
+            }
+            let compStartSec = exportCursor - overlapBefore
+            let compStart = CMTime(seconds: compStartSec, preferredTimescale: scale)
             let videoRange = CMTimeRange(start: CMTime(seconds: c.sourceStart, preferredTimescale: scale),
                                         duration: CMTime(seconds: c.duration, preferredTimescale: scale))
             try vTracks[i % 2].insertTimeRange(videoRange, of: srcVideo, at: compStart)
 
-            // Audio: skip the incoming transition period so clips are non-overlapping.
-            // overlapBefore == 0 for cuts → audio is gapless.
+            // Audio: skip the incoming transition overlap to avoid doubling.
             if let srcAudio, let at = audioTrack {
                 let audioSrcStart = c.sourceStart + overlapBefore
                 let audioDuration = c.duration - overlapBefore
                 if audioDuration > 0 {
-                    let audioCompStart = CMTime(seconds: model.start(of: i) + overlapBefore, preferredTimescale: scale)
+                    let audioCompStart = CMTime(seconds: compStartSec + overlapBefore, preferredTimescale: scale)
                     let audioRange = CMTimeRange(
                         start: CMTime(seconds: audioSrcStart, preferredTimescale: scale),
                         duration: CMTime(seconds: audioDuration, preferredTimescale: scale))
@@ -148,12 +158,14 @@ enum TimelineExporter {
                 }
             }
 
-            layout.append(ClipLayout(start: model.start(of: i), duration: c.duration,
+            layout.append(ClipLayout(start: compStartSec, duration: c.duration,
                                      trackID: vTracks[i % 2].trackID, transition: c.transitionIn,
-                                     overlap: model.overlap(before: i)))
+                                     overlap: overlapBefore))
+            exportCursor = compStartSec + c.duration
         }
 
-        let total = CMTime(seconds: max(model.totalDuration, 0.1), preferredTimescale: scale)
+        let exportDuration = max(exportCursor, 0.1)
+        let total = CMTime(seconds: exportDuration, preferredTimescale: scale)
         let videoComposition = AVMutableVideoComposition()
         videoComposition.customVideoCompositorClass = TimelineCompositor.self
         videoComposition.renderSize = renderSize
