@@ -227,8 +227,8 @@ struct TimelineEditorView: View {
                     rulerView(pps: pps).frame(height: 24)
                     clipsLayer(pps: pps).frame(height: 108)
                 }
-                ForEach(Array(1..<model.clips.count), id: \.self) { i in
-                    transitionBadgeView(clipIndex: i, pps: pps)
+                ForEach(Array(model.clips.enumerated().dropFirst()), id: \.element.id) { i, clip in
+                    transitionBadgeView(clip: clip, index: i, pps: pps)
                 }
                 playheadLayer(pps: pps)
             }
@@ -242,10 +242,10 @@ struct TimelineEditorView: View {
 
     // MARK: - Transition Badge View (visual only; taps handled by parent gesture)
 
-    private func transitionBadgeView(clipIndex i: Int, pps: Double) -> some View {
+    private func transitionBadgeView(clip: Clip, index i: Int, pps: Double) -> some View {
         let x = model.start(of: i) * pps + 16
         let y = 24.0 + 54.0
-        let kind = model.clips[i].transitionIn
+        let kind = clip.transitionIn
         return ZStack {
             Circle()
                 .fill(transitionColor(kind))
@@ -392,7 +392,7 @@ struct TimelineEditorView: View {
         let w = (model.totalDuration + 4) * pps + 32
         return ZStack(alignment: .topLeading) {
             Color.clear.frame(width: w, height: 100)
-            ForEach(model.clips.indices, id: \.self) { i in
+            ForEach(Array(model.clips.enumerated()), id: \.element.id) { i, _ in
                 clipView(index: i, pps: pps)
                     .offset(x: model.start(of: i) * pps + 16)
             }
