@@ -158,6 +158,11 @@ enum TemplateVideoExporter {
         let duration = try await screenAsset.load(.duration)
         let span = CMTimeRange(start: .zero, duration: duration)
 
+        // A/V SYNC: AVAssetWriter trims each file's leading warmup gap, so every track starts
+        // at its own first sample (track.start == 0) even though those first samples were captured
+        // at DIFFERENT real instants (audio sessions warm up hundreds of ms after the screen).
+        // All captures stop together, so we align tracks by their END: insert each non-screen
+        // track at offset (screenDuration - trackDuration). The screen video is the reference at 0.
         let screenComp = composition.addMutableTrack(withMediaType: .video, preferredTrackID: 1)!
         try screenComp.insertTimeRange(span, of: screenTrack, at: .zero)
 
@@ -171,7 +176,9 @@ enum TemplateVideoExporter {
             guard let track = try await asset.loadTracks(withMediaType: .video).first else { continue }
             let dur = try await asset.load(.duration)
             let comp = composition.addMutableTrack(withMediaType: .video, preferredTrackID: CMPersistentTrackID(10 + i))!
-            try comp.insertTimeRange(CMTimeRange(start: .zero, duration: min(dur, duration)), of: track, at: .zero)
+            let camClip = CMTimeMinimum(dur, duration)
+            let camOffset = CMTimeMaximum(.zero, CMTimeSubtract(duration, camClip))   // end-align to screen
+            try comp.insertTimeRange(CMTimeRange(start: .zero, duration: camClip), of: track, at: camOffset)
             allCameraTracks.append(comp.trackID)
             if i < deviceIDs.count { deviceToTrack[deviceIDs[i]] = comp.trackID }
         }
@@ -184,7 +191,9 @@ enum TemplateVideoExporter {
             guard let track = try await asset.loadTracks(withMediaType: .audio).first else { continue }
             let dur = try await asset.load(.duration)
             let comp = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)!
-            try comp.insertTimeRange(CMTimeRange(start: .zero, duration: min(dur, duration)), of: track, at: .zero)
+            let audioClip = CMTimeMinimum(dur, duration)
+            let audioOffset = CMTimeMaximum(.zero, CMTimeSubtract(duration, audioClip))   // end-align to screen
+            try comp.insertTimeRange(CMTimeRange(start: .zero, duration: audioClip), of: track, at: audioOffset)
             let params = AVMutableAudioMixInputParameters(track: comp)
             params.setVolume(volume, at: .zero)
             audioParams.append(params)
